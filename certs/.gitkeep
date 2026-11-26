@@ -1,0 +1,2 @@
+# Colocá acá tu certificado digital cualificado (.p12 / .pfx) para SIFEN_MODE=test o prod.
+# Los archivos *.p12, *.pfx, *.pem y *.key están ignorados en .gitignore por seguridad.

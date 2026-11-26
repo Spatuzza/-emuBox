@@ -12,6 +12,12 @@ import type { FastifyInstance } from "fastify";
 import QRCode from "qrcode";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
+import {
+  atomicDeductExternalStock,
+  atomicRestoreExternalStock,
+  getBridgeConfig,
+  isBridgeActive,
+} from "../services/bridge/adapter.js";
 import { generateSifenCDC } from "../services/sifen/cdc.js";
 import { generateKudePdf } from "../services/sifen/kudePdf.js";
 import {
@@ -141,8 +147,46 @@ export async function salesRoutes(app: FastifyInstance) {
 
     const input = parsed.data;
     const issuedAt = new Date();
+    const bridgeCfg = await getBridgeConfig();
+    const bridged = isBridgeActive(bridgeCfg);
+
+    // Agrupar cantidades si un producto se envió repetido
+    const qtyMap = new Map<string, number>();
+    for (const it of input.items) {
+      qtyMap.set(it.productId, (qtyMap.get(it.productId) ?? 0) + it.quantity);
+    }
+
+    let externalDeductedItems: Array<{ externalRawId: string; quantity: number }> = [];
+    let externalUpdatedStocks = new Map<string, number>();
 
     try {
+      // Si Bridge está activo en modo escritura atómica, descontar primero en la BD externa
+      // dentro de una transacción propia; si falla el Sidecar, compensamos automáticamente.
+      if (bridged && !bridgeCfg.readOnly) {
+        const preProducts = await prisma.product.findMany({
+          where: { id: { in: Array.from(qtyMap.keys()) }, active: true },
+        });
+        const extDeductionPayload = preProducts
+          .filter((p) => p.externalId?.startsWith("bridge:"))
+          .map((p) => ({
+            externalRawId: p.externalId!.slice("bridge:".length),
+            productName: p.name,
+            quantity: qtyMap.get(p.id) ?? 0,
+          }))
+          .filter((x) => x.quantity > 0);
+
+        if (extDeductionPayload.length > 0) {
+          const extRes = await atomicDeductExternalStock(bridgeCfg, extDeductionPayload);
+          if (extRes.applied) {
+            externalDeductedItems = extDeductionPayload.map((x) => ({
+              externalRawId: x.externalRawId,
+              quantity: x.quantity,
+            }));
+            externalUpdatedStocks = extRes.updatedStocks;
+          }
+        }
+      }
+
       const createdDoc = await prisma.$transaction(async (tx) => {
         const [emitter, customer] = await Promise.all([
           tx.emitterConfig.findUnique({ where: { id: 1 } }),
@@ -154,12 +198,6 @@ export async function salesRoutes(app: FastifyInstance) {
         }
         if (!customer) {
           throw Object.assign(new Error("Cliente no encontrado"), { statusCode: 404 });
-        }
-
-        // Agrupar cantidades si un producto se envió repetido
-        const qtyMap = new Map<string, number>();
-        for (const it of input.items) {
-          qtyMap.set(it.productId, (qtyMap.get(it.productId) ?? 0) + it.quantity);
         }
 
         const productIds = Array.from(qtyMap.keys());
@@ -177,7 +215,8 @@ export async function salesRoutes(app: FastifyInstance) {
             });
           }
           const currentStock = Number(prod.stock);
-          if (currentStock < quantity) {
+          // En Standalone exigimos stock suficiente local; en Bridge atómico ya se validó en la BD externa
+          if (!bridged && currentStock < quantity) {
             throw Object.assign(
               new Error(
                 `Stock insuficiente para "${prod.name}" (disponible: ${currentStock}, solicitado: ${quantity})`
@@ -267,16 +306,28 @@ export async function salesRoutes(app: FastifyInstance) {
           },
         });
 
-        // Descontar stock y registrar Kardex SALE por cada ítem
+        // Actualizar stock local/sombra y registrar Kardex SALE en Sidecar
         for (const [productId, quantity] of qtyMap.entries()) {
           const prod = productById.get(productId)!;
           const previousStock = Number(prod.stock);
-          const newStock = previousStock - quantity;
+          const extRawId = prod.externalId?.startsWith("bridge:")
+            ? prod.externalId.slice("bridge:".length)
+            : null;
 
-          await tx.product.update({
-            where: { id: prod.id },
-            data: { stock: newStock },
-          });
+          let newStock = previousStock;
+          let kardexNote = `Venta #${sale.saleNumber} · DE ${fullNumber}`;
+
+          if (bridged && bridgeCfg.readOnly) {
+            newStock = previousStock; // Solo Lectura: BD externa sin modificar
+            kardexNote = `Venta #${sale.saleNumber} · DE ${fullNumber} (Bridge Solo Lectura)`;
+          } else if (bridged && extRawId && externalUpdatedStocks.has(extRawId)) {
+            newStock = externalUpdatedStocks.get(extRawId)!;
+            kardexNote = `Venta #${sale.saleNumber} · DE ${fullNumber} (Bridge Atómico)`;
+            await tx.product.update({ where: { id: prod.id }, data: { stock: newStock } });
+          } else {
+            newStock = Math.max(0, previousStock - quantity);
+            await tx.product.update({ where: { id: prod.id }, data: { stock: newStock } });
+          }
 
           await tx.stockMovement.create({
             data: {
@@ -285,9 +336,9 @@ export async function salesRoutes(app: FastifyInstance) {
               quantity: -quantity,
               previousStock,
               newStock,
-              referenceType: "SALE",
+              referenceType: bridged ? "BRIDGE_SALE" : "SALE",
               referenceId: fullNumber,
-              notes: `Venta #${sale.saleNumber} · DE ${fullNumber}`,
+              notes: kardexNote,
             },
           });
         }
@@ -340,6 +391,12 @@ export async function salesRoutes(app: FastifyInstance) {
 
       return reply.status(201).send(serializeSifenDocument(createdDoc));
     } catch (err) {
+      // Compensación automática: si ya descontamos en la BD externa pero falló el Sidecar, restaurar
+      if (externalDeductedItems.length > 0) {
+        await atomicRestoreExternalStock(bridgeCfg, externalDeductedItems).catch((compErr) =>
+          app.log.error(compErr, "Error compensando stock externo tras fallo de Sidecar")
+        );
+      }
       const statusCode = (err as { statusCode?: number }).statusCode;
       if (statusCode && err instanceof Error) {
         return reply.status(statusCode).send({ error: err.message });
@@ -490,11 +547,15 @@ export async function salesRoutes(app: FastifyInstance) {
     return reply.send(pdfBuffer);
   });
 
-  // Cancelar DE (evento de cancelación hasta 48h + reposición atómica de stock en Kardex)
+  // Cancelar DE (evento de cancelación hasta 48h + reposición atómica de stock en Kardex / BD externa)
   app.post("/api/sifen/documents/:id/cancel", async (request, reply) => {
     const { id } = request.params as { id: string };
+    const bridgeCfg = await getBridgeConfig();
+    const bridged = isBridgeActive(bridgeCfg);
 
     try {
+      const extRestoreItems: Array<{ externalRawId: string; quantity: number }> = [];
+
       const updated = await prisma.$transaction(async (tx) => {
         const doc = await tx.sifenDocument.findUnique({
           where: { id },
@@ -520,12 +581,24 @@ export async function salesRoutes(app: FastifyInstance) {
           if (!prod) continue;
           const qty = Number(item.quantity);
           const prevStock = Number(prod.stock);
-          const newStock = prevStock + qty;
+          const isExternalItem = Boolean(prod.externalId?.startsWith("bridge:"));
 
-          await tx.product.update({
-            where: { id: prod.id },
-            data: { stock: newStock },
-          });
+          if (bridged && isExternalItem && !bridgeCfg.readOnly) {
+            extRestoreItems.push({
+              externalRawId: prod.externalId!.slice("bridge:".length),
+              quantity: qty,
+            });
+          }
+
+          const shouldUpdateLocal = !bridged || !bridgeCfg.readOnly;
+          const newStock = shouldUpdateLocal ? prevStock + qty : prevStock;
+
+          if (shouldUpdateLocal) {
+            await tx.product.update({
+              where: { id: prod.id },
+              data: { stock: newStock },
+            });
+          }
 
           await tx.stockMovement.create({
             data: {
@@ -536,7 +609,10 @@ export async function salesRoutes(app: FastifyInstance) {
               newStock,
               referenceType: "SIFEN_CANCEL",
               referenceId: fullNumber,
-              notes: `Cancelación DE ${fullNumber} (reposición de stock)`,
+              notes:
+                bridged && bridgeCfg.readOnly
+                  ? `Cancelación DE ${fullNumber} (Bridge Solo Lectura)`
+                  : `Cancelación DE ${fullNumber} (reposición de stock)`,
             },
           });
         }
@@ -551,7 +627,10 @@ export async function salesRoutes(app: FastifyInstance) {
           data: {
             status: SifenDocumentStatus.CANCELLED,
             sifenResponseCode: "0600",
-            sifenResponseMsg: "Evento de cancelación registrado (stock repuesto)",
+            sifenResponseMsg:
+              bridged && bridgeCfg.readOnly
+                ? "Evento de cancelación registrado (Bridge Solo Lectura)"
+                : "Evento de cancelación registrado (stock repuesto)",
           },
           include: {
             sale: {
@@ -560,6 +639,10 @@ export async function salesRoutes(app: FastifyInstance) {
           },
         });
       });
+
+      if (extRestoreItems.length > 0) {
+        await atomicRestoreExternalStock(bridgeCfg, extRestoreItems);
+      }
 
       return serializeSifenDocument(updated);
     } catch (err) {

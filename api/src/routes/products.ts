@@ -3,6 +3,11 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "../lib/prisma.js";
 import { generateProductMiniImage } from "../services/aiImage.js";
+import {
+  getBridgeConfig,
+  isBridgeActive,
+  listBridgeProducts,
+} from "../services/bridge/adapter.js";
 
 const ALLOWED_IMAGE_MIME = new Set([
   "image/jpeg",
@@ -100,23 +105,40 @@ function parseDataUrl(dataUrl: string): { mimeType: string; buffer: Buffer } | n
 }
 
 export async function productRoutes(app: FastifyInstance) {
-  // Listar productos activos (sin traer el binario BYTEA en la grilla)
+  // Listar productos activos (en Standalone usa BD propia; en Bridge lee en vivo de la BD externa)
   app.get("/api/products", async (request) => {
     const query = request.query as { q?: string; taxRate?: string; lowStock?: string };
     const q = query.q?.trim();
 
+    const bridgeCfg = await getBridgeConfig();
+    if (isBridgeActive(bridgeCfg)) {
+      return listBridgeProducts(bridgeCfg, {
+        q,
+        taxRate:
+          query.taxRate && Object.values(TaxRate).includes(query.taxRate as TaxRate)
+            ? query.taxRate
+            : undefined,
+        lowStock: query.lowStock === "true",
+      });
+    }
+
     const rows = await prisma.product.findMany({
       where: {
         active: true,
+        OR: [{ externalId: null }, { NOT: { externalId: { startsWith: "bridge:" } } }],
         ...(query.taxRate && Object.values(TaxRate).includes(query.taxRate as TaxRate)
           ? { taxRate: query.taxRate as TaxRate }
           : {}),
         ...(q
           ? {
-              OR: [
-                { name: { contains: q, mode: "insensitive" } },
-                { sku: { contains: q, mode: "insensitive" } },
-                { barcode: { contains: q, mode: "insensitive" } },
+              AND: [
+                {
+                  OR: [
+                    { name: { contains: q, mode: "insensitive" } },
+                    { sku: { contains: q, mode: "insensitive" } },
+                    { barcode: { contains: q, mode: "insensitive" } },
+                  ],
+                },
               ],
             }
           : {}),
@@ -138,6 +160,13 @@ export async function productRoutes(app: FastifyInstance) {
 
   // Crear producto + movimiento inicial de Kardex en transacción
   app.post("/api/products", async (request, reply) => {
+    const bridgeCfg = await getBridgeConfig();
+    if (isBridgeActive(bridgeCfg)) {
+      return reply.status(409).send({
+        error:
+          "En Modo Bridge el catálogo se gestiona desde tu BD externa para no alterar sus tablas. Podés asignar fotos y facturar normalmente.",
+      });
+    }
     const parsed = createProductSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.status(400).send({

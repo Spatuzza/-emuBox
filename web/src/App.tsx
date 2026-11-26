@@ -1,4 +1,4 @@
-import { Menu, RefreshCw, ShieldCheck } from "lucide-react";
+import { Database, Menu, RefreshCw, ShieldCheck } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { IntroSplash } from "./components/IntroSplash";
 import { KudeModal } from "./components/KudeModal";
@@ -7,6 +7,7 @@ import { api } from "./lib/api";
 import { INITIAL_CUSTOMERS, INITIAL_EMITTER, INITIAL_MOVEMENTS, INITIAL_PRODUCTS } from "./lib/seedData";
 import type {
   AppSection,
+  BridgeConfigState,
   Customer,
   EmitterProfile,
   HealthResponse,
@@ -63,23 +64,25 @@ export default function App() {
   const [selectedInvoice, setSelectedInvoice] = useState<SifenInvoice | null>(null);
   const [toast, setToast] = useState<{ text: string; tone?: "ok" | "err" } | null>(null);
 
-  // Salud en vivo del backend Docker
+  // Salud en vivo del backend Docker + estado Bridge
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [systemStatus, setSystemStatus] = useState<SystemStatusResponse | null>(null);
+  const [bridgeConfig, setBridgeConfig] = useState<BridgeConfigState | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
   const showToast = useCallback((text: string, tone: "ok" | "err" = "ok") => {
     setToast({ text, tone });
-    window.setTimeout(() => setToast(null), 3800);
+    window.setTimeout(() => setToast(null), 4000);
   }, []);
 
   const syncFromBackend = useCallback(async () => {
     setRefreshing(true);
     try {
-      const [h, s, em, prods, movs, custs, docs] = await Promise.all([
+      const [h, s, em, br, prods, movs, custs, docs] = await Promise.all([
         api.getHealth(),
         api.getSystemStatus(),
         api.getEmitter(),
+        api.getBridgeConfig(),
         api.listProducts(),
         api.listMovements(150),
         api.listCustomers(),
@@ -88,6 +91,7 @@ export default function App() {
       setHealth(h);
       setSystemStatus(s);
       setEmitter(em);
+      setBridgeConfig(br);
       setProducts(prods);
       setMovements(movs);
       setCustomers(custs);
@@ -296,9 +300,9 @@ export default function App() {
     }
   };
 
-  const handleResetDemo = () => {
-    void syncFromBackend();
-    showToast("Datos sincronizados con PostgreSQL");
+  const handleBridgeChanged = async (message: string) => {
+    await syncFromBackend();
+    showToast(message);
   };
 
   const lowStockCount = products.filter((p) => p.active && p.stock <= p.minStock).length;
@@ -349,6 +353,20 @@ export default function App() {
             </div>
 
             <div className="flex items-center gap-2">
+              {bridgeConfig?.mode === "BRIDGE" && (
+                <button
+                  type="button"
+                  onClick={() => setActiveSection("settings")}
+                  className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${
+                    bridgeConfig.readOnly
+                      ? "border-indigo-300 bg-indigo-50 text-indigo-800"
+                      : "border-emerald-300 bg-emerald-50 text-emerald-800"
+                  }`}
+                >
+                  <Database className="h-3.5 w-3.5" />
+                  {bridgeConfig.readOnly ? "BRIDGE · SOLO LECTURA" : "BRIDGE · ATÓMICO"}
+                </button>
+              )}
               <span
                 className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${modeBadge.classes}`}
               >
@@ -415,8 +433,10 @@ export default function App() {
           {activeSection === "settings" && (
             <SettingsView
               emitter={emitter}
+              bridgeConfig={bridgeConfig}
               onSaveEmitter={handleSaveEmitter}
-              onResetDemo={handleResetDemo}
+              onBridgeChanged={handleBridgeChanged}
+              onError={(msg) => showToast(msg, "err")}
             />
           )}
         </main>

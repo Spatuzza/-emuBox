@@ -73,6 +73,30 @@ enum SifenBatchStatus {
   ERROR
 }
 
+enum DataSourceMode {
+  STANDALONE
+  BRIDGE
+}
+
+// ============================================================================
+// Configuración del Modo Bridge / Metamórfico (Sidecar)
+// ============================================================================
+
+model BridgeConfig {
+  id              Int            @id @default(1)
+  mode            DataSourceMode @default(STANDALONE)
+  provider        String         @default("postgresql") @db.VarChar(32)
+  connectionUrl   String?
+  readOnly        Boolean        @default(true)
+  mappingJson     Json?
+  lastTestedAt    DateTime?
+  lastTestOk      Boolean        @default(false)
+  lastTestMessage String?
+  updatedAt       DateTime       @updatedAt
+
+  @@map("bridge_config")
+}
+
 // ============================================================================
 // Configuración del Emisor (Contribuyente DNIT)
 // ============================================================================
@@ -110,6 +134,7 @@ model EmitterConfig {
 
 model Customer {
   id             String         @id @default(cuid())
+  externalId     String?        @db.VarChar(120)
   documentType   DocumentIdType @default(SIN_DOCUMENTO)
   documentNumber String         @db.VarChar(20)
   dv             String?        @db.VarChar(2)
@@ -125,6 +150,7 @@ model Customer {
   sales Sale[]
 
   @@unique([documentType, documentNumber])
+  @@index([externalId])
   @@map("customers")
 }
 
@@ -134,6 +160,7 @@ model Customer {
 
 model Product {
   id            String   @id @default(cuid())
+  externalId    String?  @db.VarChar(120)
   sku           String   @unique @db.VarChar(50)
   barcode       String?  @unique @db.VarChar(64)
   name          String   @db.VarChar(200)
@@ -154,6 +181,7 @@ model Product {
   image     ProductImage?
 
   @@index([name])
+  @@index([externalId])
   @@map("products")
 }
 

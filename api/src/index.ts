@@ -2,12 +2,14 @@ import cors from "@fastify/cors";
 import Fastify from "fastify";
 import { env } from "./config/env.js";
 import { prisma } from "./lib/prisma.js";
+import { bridgeRoutes } from "./routes/bridge.js";
 import { customerRoutes } from "./routes/customers.js";
 import { emitterRoutes } from "./routes/emitter.js";
 import { healthRoutes } from "./routes/health.js";
 import { kardexRoutes } from "./routes/kardex.js";
 import { productRoutes } from "./routes/products.js";
 import { salesRoutes } from "./routes/sales.js";
+import { closeBridgePool } from "./services/bridge/adapter.js";
 
 const app = Fastify({
   bodyLimit: 4 * 1024 * 1024, // 4 MB para permitir carga de fotos en base64 (hasta 2 MB binarios)
@@ -27,6 +29,7 @@ await app.register(cors, {
 });
 
 await app.register(healthRoutes);
+await app.register(bridgeRoutes);
 await app.register(emitterRoutes);
 await app.register(productRoutes);
 await app.register(kardexRoutes);
@@ -36,6 +39,7 @@ await app.register(salesRoutes);
 const shutdown = async (signal: string) => {
   app.log.info(`Recibida señal ${signal}, cerrando servidor...`);
   await app.close();
+  await closeBridgePool();
   await prisma.$disconnect();
   process.exit(0);
 };

@@ -3,6 +3,11 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { calculateMod11DV } from "../lib/paraguay.js";
 import { prisma } from "../lib/prisma.js";
+import {
+  getBridgeConfig,
+  isBridgeActive,
+  listBridgeCustomers,
+} from "../services/bridge/adapter.js";
 
 const createCustomerSchema = z.object({
   documentType: z.nativeEnum(DocumentIdType).default(DocumentIdType.RUC),
@@ -20,14 +25,27 @@ export async function customerRoutes(app: FastifyInstance) {
     const query = request.query as { q?: string };
     const q = query.q?.trim();
 
+    const bridgeCfg = await getBridgeConfig();
+    if (isBridgeActive(bridgeCfg)) {
+      const bridgedCustomers = await listBridgeCustomers(bridgeCfg, q);
+      if (bridgedCustomers) {
+        return bridgedCustomers;
+      }
+    }
+
     const rows = await prisma.customer.findMany({
       where: {
         active: true,
+        OR: [{ externalId: null }, { NOT: { externalId: { startsWith: "bridge:" } } }],
         ...(q
           ? {
-              OR: [
-                { name: { contains: q, mode: "insensitive" } },
-                { documentNumber: { contains: q, mode: "insensitive" } },
+              AND: [
+                {
+                  OR: [
+                    { name: { contains: q, mode: "insensitive" } },
+                    { documentNumber: { contains: q, mode: "insensitive" } },
+                  ],
+                },
               ],
             }
           : {}),

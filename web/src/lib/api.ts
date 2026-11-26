@@ -1,10 +1,14 @@
 import type {
+  BridgeConfigState,
   Customer,
+  DataSourceMode,
   EmitterProfile,
   HealthResponse,
+  IntrospectionResult,
   PaymentCondition,
   PaymentMethod,
   Product,
+  SchemaMapping,
   SifenInvoice,
   StockMovement,
   StockMovementType,
@@ -130,6 +134,51 @@ export const api = {
   cancelSifenDocument: (id: string) =>
     apiJson<SifenInvoice>(`/api/sifen/documents/${id}/cancel`, {
       method: "POST",
+    }),
+
+  // Modo Bridge / Metamórfico y Mantenimiento seguro de BD
+  getBridgeConfig: () => apiJson<BridgeConfigState>("/api/bridge/config"),
+  testBridgeConnection: (payload: { connectionUrl?: string; useSavedConnection?: boolean }) =>
+    apiJson<{ ok: boolean; database?: string; serverVersion?: string; message: string }>(
+      "/api/bridge/test",
+      { method: "POST", body: JSON.stringify(payload) }
+    ),
+  introspectBridge: (payload: { connectionUrl?: string; useSavedConnection?: boolean }) =>
+    apiJson<IntrospectionResult>("/api/bridge/introspect", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  saveBridgeConfig: (payload: {
+    mode: DataSourceMode;
+    connectionUrl?: string | null;
+    readOnly: boolean;
+    mapping?: SchemaMapping | null;
+  }) =>
+    apiJson<BridgeConfigState>("/api/bridge/config", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+  importBridgeData: (payload: {
+    connectionUrl?: string;
+    useSavedConnection?: boolean;
+    mapping: SchemaMapping;
+    replaceDemoCatalog: boolean;
+    confirmPhrase?: string;
+  }) =>
+    apiJson<{ ok: boolean; importedProducts: number; importedCustomers: number; message: string }>(
+      "/api/bridge/import",
+      { method: "POST", body: JSON.stringify(payload) }
+    ),
+  createSandboxLegacy: () =>
+    apiJson<{
+      schema: string;
+      maskedConnectionUrl: string;
+      introspection: IntrospectionResult;
+    }>("/api/bridge/sandbox-legacy", { method: "POST", body: JSON.stringify({}) }),
+  resetInternalDb: (payload: { mode: "empty" | "demo"; confirmPhrase: string }) =>
+    apiJson<{ ok: boolean; mode: "empty" | "demo"; message: string }>("/api/system/reset-db", {
+      method: "POST",
+      body: JSON.stringify(payload),
     }),
 };
 

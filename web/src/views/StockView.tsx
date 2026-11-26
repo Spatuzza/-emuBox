@@ -14,8 +14,9 @@ import {
   Sparkles,
   Trash2,
 } from "lucide-react";
-import { type ChangeEvent, type FormEvent, useMemo, useRef, useState } from "react";
+import { type ChangeEvent, type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Modal } from "../components/Modal";
+import { PaginationBar } from "../components/PaginationBar";
 import { compressImageFileToDataUrl } from "../lib/api";
 import { formatDateTimePY, formatPYG, taxRateBadgeClass, taxRateLabel } from "../lib/format";
 import type { Product, StockMovement, StockMovementType, TaxRate } from "../types/domain";
@@ -53,6 +54,8 @@ function formatSourceLabel(source?: string): string {
   switch (source) {
     case "UPLOAD":
       return "Foto subida";
+    case "EXTERNAL_URL":
+      return "URL BD externa";
     case "ICON_ICONIFY":
       return "Ícono simple · Iconify";
     case "AI_POLLINATIONS":
@@ -80,6 +83,10 @@ export function StockView({
   const [subTab, setSubTab] = useState<"catalog" | "kardex">("catalog");
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<StockFilter>("ALL");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+  const [kardexPage, setKardexPage] = useState(1);
+  const [brokenImages, setBrokenImages] = useState<Record<string, boolean>>({});
 
   // Modal Producto
   const [productModalOpen, setProductModalOpen] = useState(false);
@@ -121,6 +128,20 @@ export function StockView({
       );
     });
   }, [products, query, filter]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [query, filter, pageSize]);
+
+  const paginatedProducts = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return filteredProducts.slice(start, start + pageSize);
+  }, [filteredProducts, page, pageSize]);
+
+  const paginatedMovements = useMemo(() => {
+    const start = (kardexPage - 1) * 25;
+    return movements.slice(start, start + 25);
+  }, [movements, kardexPage]);
 
   const openNewProduct = () => {
     setEditingId(null);
@@ -335,11 +356,12 @@ export function StockView({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 tabular-nums">
-                  {filteredProducts.map((p) => {
+                  {paginatedProducts.map((p) => {
                     const isLow = p.stock <= p.minStock;
+                    const showPhoto = Boolean(p.imageUrl) && !brokenImages[p.id];
                     return (
                       <tr key={p.id} className="transition hover:bg-slate-50/70">
-                        <td className="px-4 py-3">
+                        <td className="px-4 py-2.5">
                           <div className="flex items-center gap-3">
                             <button
                               type="button"
@@ -347,13 +369,17 @@ export function StockView({
                                 setImageModalProductId(p.id);
                                 setAiPrompt("");
                               }}
-                              title="Gestionar foto o generar miniatura con IA"
+                              title="Gestionar foto o generar miniatura"
                               className="group relative flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-slate-200 bg-slate-50 transition hover:border-[#0038A8]"
                             >
-                              {p.imageUrl ? (
+                              {showPhoto ? (
                                 <img
                                   src={p.imageUrl}
                                   alt={p.name}
+                                  loading="lazy"
+                                  onError={() =>
+                                    setBrokenImages((prev) => ({ ...prev, [p.id]: true }))
+                                  }
                                   className="h-full w-full object-cover"
                                 />
                               ) : (
@@ -457,24 +483,34 @@ export function StockView({
               </table>
             </div>
           </div>
+
+          <PaginationBar
+            page={page}
+            pageSize={pageSize}
+            totalItems={filteredProducts.length}
+            pageSizeOptions={[25, 50, 100]}
+            onPageChange={setPage}
+            onPageSizeChange={setPageSize}
+          />
         </>
       ) : (
         /* Historial Kardex */
-        <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse text-left text-sm">
-              <thead>
-                <tr className="border-b border-slate-200 bg-slate-50/80 text-xs font-semibold text-slate-500">
-                  <th className="px-4 py-3">Fecha</th>
-                  <th className="px-4 py-3">Producto</th>
-                  <th className="px-4 py-3">Tipo</th>
-                  <th className="px-4 py-3 text-right">Cantidad</th>
-                  <th className="px-4 py-3 text-right">Stock Ant. → Nuevo</th>
-                  <th className="px-4 py-3">Referencia / Motivo</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 tabular-nums">
-                {movements.map((m) => {
+        <div className="space-y-4">
+          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <div className="overflow-x-auto">
+              <table className="w-full border-collapse text-left text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 bg-slate-50/80 text-xs font-semibold text-slate-500">
+                    <th className="px-4 py-3">Fecha</th>
+                    <th className="px-4 py-3">Producto</th>
+                    <th className="px-4 py-3">Tipo</th>
+                    <th className="px-4 py-3 text-right">Cantidad</th>
+                    <th className="px-4 py-3 text-right">Stock Ant. → Nuevo</th>
+                    <th className="px-4 py-3">Referencia / Motivo</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 tabular-nums">
+                  {paginatedMovements.map((m) => {
                   const isPositive = m.quantity >= 0;
                   return (
                     <tr key={m.id} className="hover:bg-slate-50/60">
@@ -515,9 +551,16 @@ export function StockView({
                     </tr>
                   );
                 })}
-              </tbody>
-            </table>
+                </tbody>
+              </table>
+            </div>
           </div>
+          <PaginationBar
+            page={kardexPage}
+            pageSize={25}
+            totalItems={movements.length}
+            onPageChange={setKardexPage}
+          />
         </div>
       )}
 

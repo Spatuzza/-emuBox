@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify";
 import { env } from "../config/env.js";
 import { prisma } from "../lib/prisma.js";
+import { getBridgeConfig } from "../services/bridge/adapter.js";
 
 export async function healthRoutes(app: FastifyInstance) {
   app.get("/api/health", async (_request, reply) => {
@@ -27,9 +28,10 @@ export async function healthRoutes(app: FastifyInstance) {
   });
 
   app.get("/api/system/status", async () => {
-    const [emitter, productCount, customerCount, saleCount, sifenDocCount, products] =
+    const [emitter, bridgeCfg, productCount, customerCount, saleCount, sifenDocCount, products] =
       await Promise.all([
         prisma.emitterConfig.findUnique({ where: { id: 1 } }),
+        getBridgeConfig(),
         prisma.product.count({ where: { active: true } }),
         prisma.customer.count({ where: { active: true } }),
         prisma.sale.count(),
@@ -46,8 +48,12 @@ export async function healthRoutes(app: FastifyInstance) {
 
     return {
       service: "emubox-api",
-      version: "0.1.0",
+      version: "0.4.0",
       sifenMode: env.SIFEN_MODE,
+      dataSource: {
+        mode: bridgeCfg.mode,
+        readOnly: bridgeCfg.readOnly,
+      },
       emitter: emitter
         ? {
             ruc: `${emitter.ruc}-${emitter.dv}`,
@@ -68,6 +74,7 @@ export async function healthRoutes(app: FastifyInstance) {
         { id: "infra-ui", name: "Infraestructura Docker, BD y Frontend completo", status: "ready" },
         { id: "stock-api", name: "API Productos, Fotos DB/IA, Clientes y Kardex", status: "ready" },
         { id: "pos-sifen-mock", name: "API Ventas + Motor SIFEN v150 (XML + CDC + KuDE PDF)", status: "ready" },
+        { id: "db-bridge", name: "Modo Bridge / Metamórfico (BD Externa + Sidecar)", status: "ready" },
         { id: "sifen-lotes", name: "Firma .p12 + Worker de Lotes SIFEN Test/Prod", status: "planned" },
         { id: "network", name: "Red segura (Caddy HTTPS / Cloudflare Tunnel CGNAT)", status: "planned" },
       ],

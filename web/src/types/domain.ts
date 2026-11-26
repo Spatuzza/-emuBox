@@ -1,4 +1,5 @@
 export type SifenMode = "mock" | "test" | "prod";
+export type DataSourceMode = "STANDALONE" | "BRIDGE";
 export type TaxRate = "IVA_10" | "IVA_5" | "EXENTA";
 export type DocumentIdType = "RUC" | "CI" | "PASAPORTE" | "SIN_DOCUMENTO";
 export type StockMovementType = "IN" | "OUT" | "SALE" | "RETURN" | "ADJUSTMENT";
@@ -146,4 +147,72 @@ export interface SifenInvoice {
   sifenResponseCode: string;
   sifenResponseMsg: string;
   createdAt: string;
+}
+
+export interface ProductMapping {
+  schema: string;
+  table: string;
+  idColumn: string;
+  skuColumn?: string | null;
+  barcodeColumn?: string | null;
+  nameColumn: string;
+  priceColumn: string;
+  costColumn?: string | null;
+  stockColumn?: string | null;
+  minStockColumn?: string | null;
+  taxRateColumn?: string | null;
+  unitColumn?: string | null;
+  imageUrlColumn?: string | null;
+  defaultTaxRate: TaxRate;
+}
+
+export interface CustomerMapping {
+  schema: string;
+  table: string;
+  idColumn: string;
+  documentColumn: string;
+  dvColumn?: string | null;
+  nameColumn: string;
+  emailColumn?: string | null;
+  addressColumn?: string | null;
+}
+
+export interface SchemaMapping {
+  products: ProductMapping;
+  customers?: CustomerMapping | null;
+}
+
+export interface IntrospectedColumn {
+  name: string;
+  dataType: string;
+  isNullable: boolean;
+}
+
+export interface IntrospectedTable {
+  schema: string;
+  table: string;
+  columns: IntrospectedColumn[];
+  estimatedRows: number;
+  sampleRows: Array<Record<string, unknown>>;
+}
+
+export interface IntrospectionResult {
+  database: string;
+  serverVersion: string;
+  tables: IntrospectedTable[];
+  suggestedMapping: Partial<SchemaMapping>;
+  confidenceNotes: string[];
+}
+
+export interface BridgeConfigState {
+  mode: DataSourceMode;
+  provider: string;
+  hasConnectionUrl: boolean;
+  maskedConnectionUrl: string;
+  readOnly: boolean;
+  mapping: SchemaMapping | null;
+  lastTestedAt: string | null;
+  lastTestOk: boolean;
+  lastTestMessage: string | null;
+  updatedAt: string;
 }

@@ -2,6 +2,7 @@ import {
   Banknote,
   CreditCard,
   Minus,
+  Package,
   Plus,
   QrCode,
   Receipt,
@@ -10,8 +11,9 @@ import {
   Trash2,
   UserPlus,
 } from "lucide-react";
-import { type FormEvent, useMemo, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useState } from "react";
 import { Modal } from "../components/Modal";
+import { PaginationBar } from "../components/PaginationBar";
 import {
   calculateMod11DV,
   computeItemIva,
@@ -26,6 +28,7 @@ import type {
   PaymentMethod,
   Product,
   SaleItem,
+  TaxRate,
 } from "../types/domain";
 
 interface PosViewProps {
@@ -40,6 +43,8 @@ interface PosViewProps {
   }) => Promise<void>;
 }
 
+type PosFilter = "ALL" | "IN_STOCK" | TaxRate;
+
 export function PosView({
   products,
   customers,
@@ -47,12 +52,18 @@ export function PosView({
   onCompleteSale,
 }: PosViewProps) {
   const [search, setSearch] = useState("");
+  const [posFilter, setPosFilter] = useState<PosFilter>("ALL");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(12);
+  const [brokenImages, setBrokenImages] = useState<Record<string, boolean>>({});
+
   const [cart, setCart] = useState<Array<{ productId: string; quantity: number }>>([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>(
     customers[0]?.id ?? "cust-cf"
   );
   const [paymentCondition, setPaymentCondition] = useState<PaymentCondition>("CONTADO");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("EFECTIVO");
+  const [submitting, setSubmitting] = useState(false);
 
   // Modal rápido de nuevo cliente RUC/CI
   const [customerModalOpen, setCustomerModalOpen] = useState(false);
@@ -61,18 +72,41 @@ export function PosView({
   const [custName, setCustName] = useState("");
   const [custEmail, setCustEmail] = useState("");
 
+  useEffect(() => {
+    if (customers.length > 0 && !customers.some((c) => c.id === selectedCustomerId)) {
+      setSelectedCustomerId(customers[0].id);
+    }
+  }, [customers, selectedCustomerId]);
+
   const activeProducts = useMemo(() => products.filter((p) => p.active), [products]);
 
   const filteredProducts = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return activeProducts;
-    return activeProducts.filter(
-      (p) =>
+    return activeProducts.filter((p) => {
+      if (posFilter === "IN_STOCK" && p.stock <= 0) return false;
+      if (
+        (posFilter === "IVA_10" || posFilter === "IVA_5" || posFilter === "EXENTA") &&
+        p.taxRate !== posFilter
+      ) {
+        return false;
+      }
+      if (!q) return true;
+      return (
         p.name.toLowerCase().includes(q) ||
         p.sku.toLowerCase().includes(q) ||
         (p.barcode ?? "").toLowerCase().includes(q)
-    );
-  }, [activeProducts, search]);
+      );
+    });
+  }, [activeProducts, search, posFilter]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [search, posFilter, pageSize]);
+
+  const paginatedProducts = useMemo(() => {
+    const start = (page - 1) * pageSize;
+    return filteredProducts.slice(start, start + pageSize);
+  }, [filteredProducts, page, pageSize]);
 
   const addToCart = (product: Product) => {
     if (product.stock <= 0) return;
@@ -137,18 +171,22 @@ export function PosView({
   }, [cart, products]);
 
   const totals = useMemo(() => computeSaleTotals(saleItems), [saleItems]);
-  const selectedCustomer =
-    customers.find((c) => c.id === selectedCustomerId) ?? customers[0];
+  const selectedCustomer = customers.find((c) => c.id === selectedCustomerId) ?? customers[0];
 
   const handleCheckout = async () => {
-    if (saleItems.length === 0 || !selectedCustomer) return;
-    await onCompleteSale({
-      customer: selectedCustomer,
-      paymentCondition,
-      paymentMethod,
-      items: saleItems,
-    });
-    setCart([]);
+    if (saleItems.length === 0 || !selectedCustomer || submitting) return;
+    setSubmitting(true);
+    try {
+      await onCompleteSale({
+        customer: selectedCustomer,
+        paymentCondition,
+        paymentMethod,
+        items: saleItems,
+      });
+      setCart([]);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const handleCreateCustomerSubmit = async (e: FormEvent) => {
@@ -171,105 +209,169 @@ export function PosView({
   };
 
   return (
-    <div className="grid gap-5 lg:grid-cols-12">
-      {/* Columna Izquierda: Buscador + Catálogo Rápido */}
+    <div className="grid items-start gap-5 lg:grid-cols-12">
+      {/* Columna Izquierda: Buscador + Filtros + Grilla Paginada (sin scroll infinito) */}
       <div className="space-y-4 lg:col-span-7 xl:col-span-8">
-        <div>
-          <h2 className="font-display text-xl font-bold text-slate-900">
-            Caja POS — Emisión rápida SIFEN
-          </h2>
-          <p className="text-xs text-slate-500">
-            Escaneá un código de barras, escribí SKU + Enter o tocá un producto para sumar al ticket.
-          </p>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="font-display text-xl font-bold text-slate-900">
+              Caja POS — Emisión rápida SIFEN
+            </h2>
+            <p className="text-xs text-slate-500">
+              Escaneá código de barras, escribí nombre/SKU + Enter o elegí una tarjeta.
+            </p>
+          </div>
+          <span className="rounded-full bg-slate-200/70 px-3 py-1 font-mono text-xs font-semibold text-slate-700">
+            {filteredProducts.length} artículos
+          </span>
         </div>
 
-        <form onSubmit={handleBarcodeEnter} className="relative">
-          <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400" />
-          <input
-            type="search"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Escanear código de barras, SKU o buscar producto..."
-            className="w-full rounded-2xl border border-slate-200 bg-white py-3 pr-4 pl-10 text-sm text-slate-900 shadow-sm outline-none transition focus:border-[#0038A8] focus:ring-2 focus:ring-[#0038A8]/15"
-          />
-        </form>
+        {/* Barra búsqueda + filtros rápidos */}
+        <div className="space-y-2.5 rounded-2xl border border-slate-200 bg-white p-3.5 shadow-sm">
+          <form onSubmit={handleBarcodeEnter} className="relative">
+            <Search className="pointer-events-none absolute top-1/2 left-3.5 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            <input
+              type="search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Buscar entre todos los productos por nombre, SKU o código de barras..."
+              className="w-full rounded-xl border border-slate-200 bg-slate-50 py-2.5 pr-4 pl-10 text-sm text-slate-900 outline-none transition focus:border-[#0038A8] focus:bg-white focus:ring-2 focus:ring-[#0038A8]/15"
+            />
+          </form>
 
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {filteredProducts.map((p) => {
-            const inCart = cart.find((c) => c.productId === p.id)?.quantity ?? 0;
-            const outOfStock = p.stock <= 0;
-            return (
+          <div className="flex flex-wrap items-center gap-1.5">
+            {(
+              [
+                { id: "ALL", label: "Todos" },
+                { id: "IN_STOCK", label: "Con stock" },
+                { id: "IVA_10", label: "IVA 10%" },
+                { id: "IVA_5", label: "IVA 5%" },
+                { id: "EXENTA", label: "Exenta" },
+              ] as const
+            ).map((chip) => (
               <button
-                key={p.id}
+                key={chip.id}
                 type="button"
-                disabled={outOfStock}
-                onClick={() => addToCart(p)}
-                className={`group relative flex flex-col justify-between rounded-2xl border p-4 text-left transition ${
-                  outOfStock
-                    ? "cursor-not-allowed border-slate-200 bg-slate-100 opacity-55"
-                    : inCart > 0
-                      ? "border-[#0038A8] bg-blue-50/35 shadow-sm"
-                      : "border-slate-200 bg-white shadow-sm hover:-translate-y-0.5 hover:border-[#0038A8]/40 hover:shadow-md"
+                onClick={() => setPosFilter(chip.id)}
+                className={`rounded-lg px-2.5 py-1 text-xs font-semibold transition ${
+                  posFilter === chip.id
+                    ? "bg-[#0038A8] text-white"
+                    : "bg-slate-100 text-slate-600 hover:bg-slate-200"
                 }`}
               >
-                {inCart > 0 && (
-                  <span className="absolute top-3 right-3 flex h-6 min-w-6 items-center justify-center rounded-full bg-[#0038A8] px-1.5 font-mono text-xs font-bold text-white">
-                    {inCart}
-                  </span>
-                )}
-
-                {p.imageUrl && (
-                  <div className="mb-3 flex h-24 w-full items-center justify-center overflow-hidden rounded-xl border border-slate-100 bg-slate-50/70 p-1.5">
-                    <img
-                      src={p.imageUrl}
-                      alt={p.name}
-                      loading="lazy"
-                      className={`h-full w-full transition duration-300 group-hover:scale-105 ${
-                        p.imageSource === "UPLOAD" ? "rounded-lg object-cover" : "object-contain"
-                      }`}
-                    />
-                  </div>
-                )}
-
-                <div>
-                  <span
-                    className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${taxRateBadgeClass(
-                      p.taxRate
-                    )}`}
-                  >
-                    {taxRateLabel(p.taxRate)}
-                  </span>
-                  <h3 className="mt-2 line-clamp-2 text-sm font-semibold text-slate-900">
-                    {p.name}
-                  </h3>
-                  <p className="mt-0.5 font-mono text-[11px] text-slate-400">{p.sku}</p>
-                </div>
-
-                <div className="mt-4 flex items-end justify-between border-t border-slate-100 pt-2.5 tabular-nums">
-                  <span className="font-display text-base font-bold text-slate-900">
-                    {formatPYG(p.price)}
-                  </span>
-                  <span
-                    className={`text-[11px] font-semibold ${
-                      p.stock <= p.minStock ? "text-amber-700" : "text-slate-500"
-                    }`}
-                  >
-                    Stock: {p.stock}
-                  </span>
-                </div>
+                {chip.label}
               </button>
-            );
-          })}
+            ))}
+          </div>
         </div>
+
+        {/* Grilla paginada */}
+        {paginatedProducts.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center text-sm text-slate-500">
+            No se encontraron productos para "{search}".
+          </div>
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {paginatedProducts.map((p) => {
+              const inCart = cart.find((c) => c.productId === p.id)?.quantity ?? 0;
+              const outOfStock = p.stock <= 0;
+              const showPhoto = Boolean(p.imageUrl) && !brokenImages[p.id];
+              const isPhotoCover =
+                p.imageSource === "UPLOAD" || p.imageSource === "EXTERNAL_URL";
+
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  disabled={outOfStock}
+                  onClick={() => addToCart(p)}
+                  className={`group relative flex flex-col justify-between rounded-2xl border p-3.5 text-left transition ${
+                    outOfStock
+                      ? "cursor-not-allowed border-slate-200 bg-slate-100 opacity-55"
+                      : inCart > 0
+                        ? "border-[#0038A8] bg-blue-50/40 shadow-sm ring-1 ring-[#0038A8]/20"
+                        : "border-slate-200 bg-white shadow-sm hover:-translate-y-0.5 hover:border-[#0038A8]/40 hover:shadow-md"
+                  }`}
+                >
+                  {inCart > 0 && (
+                    <span className="absolute top-2.5 right-2.5 z-10 flex h-6 min-w-6 items-center justify-center rounded-full bg-[#0038A8] px-1.5 font-mono text-xs font-bold text-white shadow-sm">
+                      {inCart}
+                    </span>
+                  )}
+
+                  {/* Miniatura uniforme */}
+                  <div className="mb-2.5 flex h-28 w-full items-center justify-center overflow-hidden rounded-xl border border-slate-100 bg-slate-50">
+                    {showPhoto ? (
+                      <img
+                        src={p.imageUrl}
+                        alt={p.name}
+                        loading="lazy"
+                        onError={() => setBrokenImages((prev) => ({ ...prev, [p.id]: true }))}
+                        className={`h-full w-full transition duration-300 group-hover:scale-105 ${
+                          isPhotoCover ? "object-cover" : "object-contain p-2"
+                        }`}
+                      />
+                    ) : (
+                      <Package className="h-8 w-8 text-slate-300" />
+                    )}
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between gap-1">
+                      <span
+                        className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold ${taxRateBadgeClass(
+                          p.taxRate
+                        )}`}
+                      >
+                        {taxRateLabel(p.taxRate)}
+                      </span>
+                      <span className="truncate font-mono text-[10px] text-slate-400">{p.sku}</span>
+                    </div>
+                    <h3 className="mt-1.5 line-clamp-2 text-sm font-semibold text-slate-900">
+                      {p.name}
+                    </h3>
+                  </div>
+
+                  <div className="mt-3 flex items-end justify-between border-t border-slate-100 pt-2 tabular-nums">
+                    <span className="font-display text-base font-bold text-slate-900">
+                      {formatPYG(p.price)}
+                    </span>
+                    <span
+                      className={`text-[11px] font-semibold ${
+                        p.stock <= p.minStock ? "text-amber-700" : "text-slate-500"
+                      }`}
+                    >
+                      {p.stock >= 9999 ? "Disp." : `Stock: ${p.stock}`}
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        <PaginationBar
+          page={page}
+          pageSize={pageSize}
+          totalItems={filteredProducts.length}
+          pageSizeOptions={[12, 24, 48]}
+          onPageChange={setPage}
+          onPageSizeChange={setPageSize}
+        />
       </div>
 
-      {/* Columna Derecha: Ticket Activo + Cliente + Liquidación IVA PY */}
-      <aside className="flex flex-col rounded-2xl border border-slate-200 bg-white shadow-sm lg:col-span-5 xl:col-span-4">
-        <div className="border-b border-slate-100 p-4">
+      {/* Columna Derecha: Ticket Activo FIJO (Sticky) siempre visible */}
+      <aside className="flex flex-col rounded-2xl border border-slate-200 bg-white shadow-sm lg:sticky lg:top-20 lg:col-span-5 lg:max-h-[calc(100vh-6.2rem)] xl:col-span-4">
+        <div className="shrink-0 border-b border-slate-100 p-4">
           <div className="mb-3 flex items-center justify-between">
             <h3 className="flex items-center gap-2 text-sm font-bold text-slate-900">
               <ShoppingCart className="h-4 w-4 text-[#0038A8]" />
               Comprobante actual
+              {saleItems.length > 0 && (
+                <span className="rounded-full bg-blue-50 px-2 py-0.5 font-mono text-[11px] font-bold text-[#0038A8]">
+                  {saleItems.reduce((a, b) => a + b.quantity, 0)}
+                </span>
+              )}
             </h3>
             {cart.length > 0 && (
               <button
@@ -308,15 +410,15 @@ export function PosView({
           </div>
         </div>
 
-        {/* Lista de ítems del carrito */}
-        <div className="flex-1 divide-y divide-slate-100 overflow-y-auto p-4">
+        {/* Lista scrolleable de ítems del carrito */}
+        <div className="min-h-[140px] flex-1 divide-y divide-slate-100 overflow-y-auto px-4 py-2">
           {saleItems.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 text-center">
-              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100 text-slate-400">
-                <Receipt className="h-6 w-6" />
+            <div className="flex flex-col items-center justify-center py-10 text-center">
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-slate-100 text-slate-400">
+                <Receipt className="h-5 w-5" />
               </div>
-              <p className="mt-3 text-sm font-semibold text-slate-700">Carrito vacío</p>
-              <p className="mt-1 max-w-[220px] text-xs text-slate-400">
+              <p className="mt-2.5 text-sm font-semibold text-slate-700">Carrito vacío</p>
+              <p className="mt-0.5 max-w-[220px] text-xs text-slate-400">
                 Tocá cualquier producto de la izquierda para armar la factura electrónica.
               </p>
             </div>
@@ -332,7 +434,7 @@ export function PosView({
                   </p>
                 </div>
 
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center gap-1">
                   <button
                     type="button"
                     onClick={() => updateCartQty(item.productId, -1)}
@@ -356,7 +458,7 @@ export function PosView({
                     type="button"
                     onClick={() => updateCartQty(item.productId, -item.quantity)}
                     aria-label="Quitar producto"
-                    className="ml-1 rounded-lg p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                    className="ml-0.5 rounded-lg p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>
@@ -366,8 +468,8 @@ export function PosView({
           )}
         </div>
 
-        {/* Condición, método de pago y liquidación IVA Paraguay */}
-        <div className="space-y-3 border-t border-slate-200 bg-slate-50/70 p-4">
+        {/* Pie fijo del ticket: Condición, Pago y Liquidación IVA Paraguay */}
+        <div className="shrink-0 space-y-2.5 border-t border-slate-200 bg-slate-50/80 p-4">
           <div className="grid grid-cols-2 gap-2">
             {(["CONTADO", "CREDITO"] as const).map((cond) => (
               <button
@@ -400,7 +502,7 @@ export function PosView({
                   key={m.id}
                   type="button"
                   onClick={() => setPaymentMethod(m.id)}
-                  className={`flex flex-col items-center gap-1 rounded-xl border py-2 text-[10px] font-semibold transition ${
+                  className={`flex flex-col items-center gap-1 rounded-xl border py-1.5 text-[10px] font-semibold transition ${
                     paymentMethod === m.id
                       ? "border-[#0038A8] bg-blue-50 text-[#0038A8]"
                       : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
@@ -413,7 +515,6 @@ export function PosView({
             })}
           </div>
 
-          {/* Desglose IVA Paraguay */}
           <div className="space-y-1 rounded-xl border border-slate-200 bg-white p-3 text-xs tabular-nums">
             <div className="flex justify-between text-slate-500">
               <span>Liquidación IVA 10% (÷11)</span>
@@ -435,12 +536,12 @@ export function PosView({
 
           <button
             type="button"
-            disabled={saleItems.length === 0}
+            disabled={saleItems.length === 0 || submitting}
             onClick={() => void handleCheckout()}
             className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#D52B1E] px-4 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-[#b92217] disabled:cursor-not-allowed disabled:bg-slate-300"
           >
             <Receipt className="h-4 w-4" />
-            Emitir Factura Electrónica (SIFEN)
+            {submitting ? "Emitiendo DE..." : "Emitir Factura Electrónica (SIFEN)"}
           </button>
         </div>
       </aside>

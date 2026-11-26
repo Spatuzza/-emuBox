@@ -1,0 +1,274 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// Enums (Estándar Paraguay / SIFEN v150)
+// ============================================================================
+
+enum SifenMode {
+  MOCK
+  TEST
+  PROD
+}
+
+enum TaxRate {
+  IVA_10
+  IVA_5
+  EXENTA
+}
+
+enum DocumentIdType {
+  RUC
+  CI
+  PASAPORTE
+  SIN_DOCUMENTO
+}
+
+enum StockMovementType {
+  IN
+  OUT
+  SALE
+  RETURN
+  ADJUSTMENT
+}
+
+enum PaymentCondition {
+  CONTADO
+  CREDITO
+}
+
+enum PaymentMethod {
+  EFECTIVO
+  TARJETA
+  TRANSFERENCIA
+  QR
+  OTRO
+}
+
+enum SaleStatus {
+  COMPLETED
+  CANCELLED
+}
+
+enum SifenDocumentStatus {
+  DRAFT
+  SIGNED
+  QUEUED
+  SENT
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+enum SifenBatchStatus {
+  PENDING
+  SENT
+  PROCESSED
+  ERROR
+}
+
+// ============================================================================
+// Configuración del Emisor (Contribuyente DNIT)
+// ============================================================================
+
+model EmitterConfig {
+  id                     Int       @id @default(1)
+  ruc                    String    @db.VarChar(12)
+  dv                     String    @db.VarChar(2)
+  razonSocial            String    @db.VarChar(255)
+  nombreFantasia         String?   @db.VarChar(255)
+  timbrado               String    @db.VarChar(16)
+  timbradoFechaInicio    DateTime  @default(now())
+  establecimiento        String    @default("001") @db.VarChar(3)
+  puntoExpedicion        String    @default("001") @db.VarChar(3)
+  ultimoNumeroFactura    Int       @default(0)
+  actividadEconomicaCod  String    @default("47111") @db.VarChar(10)
+  actividadEconomicaDesc String    @default("Comercio al por menor en almacenes") @db.VarChar(255)
+  departamentoCod        Int       @default(1)
+  distritoCod            Int       @default(1)
+  ciudadCod              Int       @default(1)
+  direccion              String    @default("Asunción, Paraguay") @db.VarChar(255)
+  telefono               String?   @db.VarChar(30)
+  email                  String?   @db.VarChar(120)
+  sifenMode              SifenMode @default(MOCK)
+  cscId                  String    @default("0001") @db.VarChar(8)
+  csc                    String    @default("ABCD0000000000000000000000000000") @db.VarChar(64)
+  updatedAt              DateTime  @updatedAt
+
+  @@map("emitter_config")
+}
+
+// ============================================================================
+// Clientes / Receptores
+// ============================================================================
+
+model Customer {
+  id             String         @id @default(cuid())
+  documentType   DocumentIdType @default(SIN_DOCUMENTO)
+  documentNumber String         @db.VarChar(20)
+  dv             String?        @db.VarChar(2)
+  name           String         @db.VarChar(255)
+  isTaxpayer     Boolean        @default(false)
+  email          String?        @db.VarChar(120)
+  phone          String?        @db.VarChar(30)
+  address        String?        @db.VarChar(255)
+  active         Boolean        @default(true)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  sales Sale[]
+
+  @@unique([documentType, documentNumber])
+  @@map("customers")
+}
+
+// ============================================================================
+// Productos e Inventario (Kardex)
+// ============================================================================
+
+model Product {
+  id            String   @id @default(cuid())
+  sku           String   @unique @db.VarChar(50)
+  barcode       String?  @unique @db.VarChar(64)
+  name          String   @db.VarChar(200)
+  description   String?  @db.VarChar(500)
+  unit          String   @default("UNI") @db.VarChar(16)
+  unitCodeSifen Int      @default(77) // 77 = Unidad (Catálogo SIFEN)
+  price         Decimal  @db.Decimal(14, 2)
+  cost          Decimal  @default(0) @db.Decimal(14, 2)
+  taxRate       TaxRate  @default(IVA_10)
+  stock         Decimal  @default(0) @db.Decimal(12, 3)
+  minStock      Decimal  @default(0) @db.Decimal(12, 3)
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  movements StockMovement[]
+  saleItems SaleItem[]
+
+  @@index([name])
+  @@map("products")
+}
+
+model StockMovement {
+  id            String            @id @default(cuid())
+  productId     String
+  type          StockMovementType
+  quantity      Decimal           @db.Decimal(12, 3)
+  previousStock Decimal           @db.Decimal(12, 3)
+  newStock      Decimal           @db.Decimal(12, 3)
+  unitCost      Decimal?          @db.Decimal(14, 2)
+  referenceType String?           @db.VarChar(40)
+  referenceId   String?           @db.VarChar(64)
+  notes         String?           @db.VarChar(300)
+  createdAt     DateTime          @default(now())
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([productId, createdAt])
+  @@map("stock_movements")
+}
+
+// ============================================================================
+// Ventas (POS)
+// ============================================================================
+
+model Sale {
+  id               String           @id @default(cuid())
+  saleNumber       Int              @unique @default(autoincrement())
+  customerId       String
+  status           SaleStatus       @default(COMPLETED)
+  paymentCondition PaymentCondition @default(CONTADO)
+  paymentMethod    PaymentMethod    @default(EFECTIVO)
+  currency         String           @default("PYG") @db.VarChar(3)
+  subtotalExenta   Decimal          @default(0) @db.Decimal(14, 2)
+  subtotalIva5     Decimal          @default(0) @db.Decimal(14, 2)
+  subtotalIva10    Decimal          @default(0) @db.Decimal(14, 2)
+  totalIva5        Decimal          @default(0) @db.Decimal(14, 2)
+  totalIva10       Decimal          @default(0) @db.Decimal(14, 2)
+  totalAmount      Decimal          @db.Decimal(14, 2)
+  notes            String?          @db.VarChar(500)
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  customer      Customer       @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  items         SaleItem[]
+  sifenDocument SifenDocument?
+
+  @@index([createdAt])
+  @@map("sales")
+}
+
+model SaleItem {
+  id          String  @id @default(cuid())
+  saleId      String
+  productId   String
+  productSku  String  @db.VarChar(50)
+  productName String  @db.VarChar(200)
+  quantity    Decimal @db.Decimal(12, 3)
+  unitPrice   Decimal @db.Decimal(14, 2)
+  taxRate     TaxRate
+  lineTotal   Decimal @db.Decimal(14, 2)
+  ivaAmount   Decimal @db.Decimal(14, 2)
+
+  sale    Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([saleId])
+  @@map("sale_items")
+}
+
+// ============================================================================
+// SIFEN / e-Kuatia (Documentos Electrónicos y Lotes)
+// ============================================================================
+
+model SifenBatch {
+  id             String           @id @default(cuid())
+  mode           SifenMode
+  status         SifenBatchStatus @default(PENDING)
+  protocolNumber String?          @db.VarChar(64)
+  itemCount      Int              @default(0)
+  attempts       Int              @default(0)
+  lastError      String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  documents SifenDocument[]
+
+  @@index([status, createdAt])
+  @@map("sifen_batches")
+}
+
+model SifenDocument {
+  id                String              @id @default(cuid())
+  saleId            String              @unique
+  batchId           String?
+  cdc               String              @unique @db.VarChar(44)
+  deType            Int                 @default(1) // 1 = Factura electrónica
+  establecimiento   String              @db.VarChar(3)
+  puntoExpedicion   String              @db.VarChar(3)
+  documentNumber    String              @db.VarChar(7)
+  mode              SifenMode
+  status            SifenDocumentStatus @default(DRAFT)
+  xmlGenerated      String?
+  xmlSigned         String?
+  qrUrl             String?
+  kudePath          String?             @db.VarChar(255)
+  sifenProtocol     String?             @db.VarChar(64)
+  sifenResponseCode String?             @db.VarChar(16)
+  sifenResponseMsg  String?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  sale  Sale        @relation(fields: [saleId], references: [id], onDelete: Restrict)
+  batch SifenBatch? @relation(fields: [batchId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@map("sifen_documents")
+}

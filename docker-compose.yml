@@ -1,0 +1,80 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: emubox-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-emubox}
+      POSTGRES_USER: ${POSTGRES_USER:-emubox}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-emubox_dev_change_me}
+      TZ: America/Asuncion
+    ports:
+      # Solo accesible localmente (nunca exponer 5432 a Internet)
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-emubox} -d ${POSTGRES_DB:-emubox}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: emubox-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: 3000
+      DATABASE_URL: postgresql://${POSTGRES_USER:-emubox}:${POSTGRES_PASSWORD:-emubox_dev_change_me}@postgres:5432/${POSTGRES_DB:-emubox}?schema=public
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173}
+      SIFEN_MODE: ${SIFEN_MODE:-mock}
+      SIFEN_CSC_ID: ${SIFEN_CSC_ID:-0001}
+      SIFEN_CSC: ${SIFEN_CSC:-ABCD0000000000000000000000000000}
+      SIFEN_CERT_PATH: ${SIFEN_CERT_PATH:-/app/certs/certificado.p12}
+      SIFEN_CERT_PASSWORD: ${SIFEN_CERT_PASSWORD:-}
+      EMITTER_RUC: ${EMITTER_RUC:-80012345}
+      EMITTER_DV: ${EMITTER_DV:-6}
+      EMITTER_RAZON_SOCIAL: ${EMITTER_RAZON_SOCIAL:-Comercio Demo Ñemubox S.R.L.}
+      EMITTER_TIMBRADO: ${EMITTER_TIMBRADO:-12558946}
+      EMITTER_ESTABLECIMIENTO: ${EMITTER_ESTABLECIMIENTO:-001}
+      EMITTER_PUNTO_EXPEDICION: ${EMITTER_PUNTO_EXPEDICION:-001}
+      TZ: America/Asuncion
+    ports:
+      - "${API_PORT:-3000}:3000"
+    volumes:
+      - ./api/src:/app/src
+      - ./api/prisma:/app/prisma
+      - ./certs:/app/certs:ro
+      - sifen_storage:/app/storage
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: emubox-web
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      VITE_API_PROXY_TARGET: http://api:3000
+    ports:
+      - "${WEB_PORT:-5173}:5173"
+    volumes:
+      - ./web/src:/app/src
+      - ./web/index.html:/app/index.html
+
+volumes:
+  pg_data:
+  sifen_storage:

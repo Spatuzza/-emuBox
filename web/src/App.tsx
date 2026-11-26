@@ -1,353 +1,511 @@
-import {
-  AlertTriangle,
-  Box,
-  CheckCircle2,
-  Clock,
-  Database,
-  FileText,
-  RefreshCw,
-  ShieldCheck,
-  Sparkles,
-  Users,
-} from "lucide-react";
-import { type CSSProperties, type ReactNode, useCallback, useEffect, useState } from "react";
-import { EmuBoxLogo } from "./components/EmuBoxLogo";
+import { Menu, RefreshCw, ShieldCheck } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { IntroSplash } from "./components/IntroSplash";
+import { KudeModal } from "./components/KudeModal";
+import { Sidebar } from "./components/Sidebar";
+import {
+  buildSifenXmlPreview,
+  computeSaleTotals,
+  generateSifenCDC,
+} from "./lib/format";
+import {
+  createInitialInvoices,
+  INITIAL_CUSTOMERS,
+  INITIAL_EMITTER,
+  INITIAL_MOVEMENTS,
+  INITIAL_PRODUCTS,
+} from "./lib/seedData";
+import type {
+  AppSection,
+  Customer,
+  EmitterProfile,
+  HealthResponse,
+  PaymentCondition,
+  PaymentMethod,
+  Product,
+  SaleItem,
+  SifenInvoice,
+  StockMovement,
+  StockMovementType,
+  SystemStatusResponse,
+} from "./types/domain";
+import { DashboardView } from "./views/DashboardView";
+import { PosView } from "./views/PosView";
+import { SettingsView } from "./views/SettingsView";
+import { SifenView } from "./views/SifenView";
+import { StockView } from "./views/StockView";
 
-interface HealthResponse {
-  status: "ok" | "error";
-  service: string;
-  version: string;
-  database: string;
-  sifenMode: "mock" | "test" | "prod";
-  timestamp: string;
+const STORAGE_KEY = "nemubox_demo_state_v1";
+
+interface PersistedState {
+  emitter: EmitterProfile;
+  products: Product[];
+  customers: Customer[];
+  movements: StockMovement[];
+  invoices: SifenInvoice[];
 }
 
-interface SystemStatusResponse {
-  service: string;
-  version: string;
-  sifenMode: "mock" | "test" | "prod";
-  emitter: {
-    ruc: string;
-    razonSocial: string;
-    timbrado: string;
-    puntoVenta: string;
-    ultimoNumeroFactura: number;
-  } | null;
-  counts: {
-    products: number;
-    lowStockProducts: number;
-    customers: number;
-    sales: number;
-    sifenDocuments: number;
+function loadInitialState(): PersistedState {
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      return JSON.parse(raw) as PersistedState;
+    }
+  } catch {
+    // Fallback a seed inicial
+  }
+  return {
+    emitter: INITIAL_EMITTER,
+    products: INITIAL_PRODUCTS,
+    customers: INITIAL_CUSTOMERS,
+    movements: INITIAL_MOVEMENTS,
+    invoices: createInitialInvoices(),
   };
-  modules: Array<{
-    id: string;
-    name: string;
-    status: "ready" | "planned";
-  }>;
-  timestamp: string;
 }
+
+const SECTION_TITLE: Record<AppSection, string> = {
+  dashboard: "Resumen General",
+  pos: "Caja POS",
+  stock: "Productos y Kardex",
+  sifen: "Facturas Electrónicas SIFEN",
+  settings: "Configuración",
+};
 
 const SIFEN_BADGE: Record<string, { label: string; classes: string }> = {
   mock: {
-    label: "SIFEN: MOCK (Demo local)",
+    label: "SIFEN: MOCK",
     classes: "bg-amber-100 text-amber-800 border-amber-300",
   },
   test: {
-    label: "SIFEN: TEST (DNIT Pruebas)",
+    label: "SIFEN: TEST (DNIT)",
     classes: "bg-sky-100 text-sky-800 border-sky-300",
   },
   prod: {
-    label: "SIFEN: PRODUCCIÓN",
+    label: "SIFEN: PROD",
     classes: "bg-emerald-100 text-emerald-800 border-emerald-300",
   },
 };
 
-function staggerStyle(delayMs: number): CSSProperties {
-  return { "--stagger-delay": `${delayMs}ms` } as CSSProperties;
-}
-
 export default function App() {
   const [showIntro, setShowIntro] = useState(true);
   const [introRunId, setIntroRunId] = useState(0);
-  const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [status, setStatus] = useState<SystemStatusResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [activeSection, setActiveSection] = useState<AppSection>("dashboard");
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  // Estado local interactivo (preparado para conectar a endpoints Parte 2/3)
+  const [state, setState] = useState<PersistedState>(loadInitialState);
+  const [selectedInvoice, setSelectedInvoice] = useState<SifenInvoice | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+
+  // Estado en vivo del backend Docker (/api/health y /api/system/status)
+  const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [systemStatus, setSystemStatus] = useState<SystemStatusResponse | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+
+  const showToast = useCallback((message: string) => {
+    setToast(message);
+    window.setTimeout(() => setToast(null), 3200);
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    } catch {
+      // Storage lleno o deshabilitado
+    }
+  }, [state]);
+
+  const loadBackendStatus = useCallback(async () => {
+    setRefreshing(true);
     try {
       const [healthRes, statusRes] = await Promise.all([
         fetch("/api/health"),
         fetch("/api/system/status"),
       ]);
-      if (!healthRes.ok || !statusRes.ok) {
-        throw new Error(`API respondió con código ${healthRes.status} / ${statusRes.status}`);
+      if (healthRes.ok && statusRes.ok) {
+        const [h, s] = await Promise.all([
+          healthRes.json() as Promise<HealthResponse>,
+          statusRes.json() as Promise<SystemStatusResponse>,
+        ]);
+        setHealth(h);
+        setSystemStatus(s);
       }
-      const [healthJson, statusJson] = await Promise.all([
-        healthRes.json() as Promise<HealthResponse>,
-        statusRes.json() as Promise<SystemStatusResponse>,
-      ]);
-      setHealth(healthJson);
-      setStatus(statusJson);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "No se pudo conectar con la API");
+    } catch {
+      // Modo offline / backend detenido
     } finally {
-      setLoading(false);
+      setRefreshing(false);
     }
   }, []);
 
   useEffect(() => {
-    void loadData();
-  }, [loadData]);
+    void loadBackendStatus();
+  }, [loadBackendStatus]);
 
-  const handleIntroFinish = useCallback(() => {
-    setShowIntro(false);
+  // Atajos de teclado rápidos de caja (F2 = POS, F3 = Stock)
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "F2") {
+        e.preventDefault();
+        setActiveSection("pos");
+      } else if (e.key === "F3") {
+        e.preventDefault();
+        setActiveSection("stock");
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  const replayIntro = () => {
-    setIntroRunId((n) => n + 1);
-    setShowIntro(true);
+  const handleSaveProduct = (input: Omit<Product, "id"> & { id?: string }) => {
+    setState((prev) => {
+      if (input.id) {
+        return {
+          ...prev,
+          products: prev.products.map((p) =>
+            p.id === input.id ? { ...p, ...input, id: p.id } : p
+          ),
+        };
+      }
+      const newProduct: Product = {
+        ...input,
+        id: `prod-${Date.now()}`,
+      };
+      const initialMove: StockMovement = {
+        id: `mov-${Date.now()}`,
+        productId: newProduct.id,
+        productName: newProduct.name,
+        productSku: newProduct.sku,
+        type: "IN",
+        quantity: newProduct.stock,
+        previousStock: 0,
+        newStock: newProduct.stock,
+        notes: "Alta de producto en catálogo",
+        createdAt: new Date().toISOString(),
+      };
+      return {
+        ...prev,
+        products: [newProduct, ...prev.products],
+        movements: newProduct.stock > 0 ? [initialMove, ...prev.movements] : prev.movements,
+      };
+    });
+    showToast(input.id ? "Producto actualizado" : "Producto creado en el catálogo");
   };
 
-  const modeBadge = SIFEN_BADGE[status?.sifenMode ?? health?.sifenMode ?? "mock"];
+  const handleAdjustStock = (params: {
+    productId: string;
+    type: StockMovementType;
+    quantity: number;
+    notes: string;
+  }) => {
+    setState((prev) => {
+      const target = prev.products.find((p) => p.id === params.productId);
+      if (!target) return prev;
+
+      const prevStock = target.stock;
+      let newStock = prevStock;
+      let delta = params.quantity;
+
+      if (params.type === "IN") {
+        newStock = prevStock + params.quantity;
+        delta = params.quantity;
+      } else if (params.type === "OUT") {
+        newStock = Math.max(0, prevStock - params.quantity);
+        delta = -(prevStock - newStock);
+      } else {
+        newStock = Math.max(0, params.quantity);
+        delta = newStock - prevStock;
+      }
+
+      const movement: StockMovement = {
+        id: `mov-${Date.now()}`,
+        productId: target.id,
+        productName: target.name,
+        productSku: target.sku,
+        type: params.type,
+        quantity: delta,
+        previousStock: prevStock,
+        newStock,
+        notes: params.notes,
+        createdAt: new Date().toISOString(),
+      };
+
+      return {
+        ...prev,
+        products: prev.products.map((p) =>
+          p.id === target.id ? { ...p, stock: newStock } : p
+        ),
+        movements: [movement, ...prev.movements],
+      };
+    });
+    showToast("Movimiento de Kardex registrado");
+  };
+
+  const handleCreateCustomer = (input: Omit<Customer, "id">): Customer => {
+    const created: Customer = { ...input, id: `cust-${Date.now()}` };
+    setState((prev) => ({ ...prev, customers: [...prev.customers, created] }));
+    showToast(`Cliente ${created.name} registrado`);
+    return created;
+  };
+
+  const handleCompleteSale = (params: {
+    customer: Customer;
+    paymentCondition: PaymentCondition;
+    paymentMethod: PaymentMethod;
+    items: SaleItem[];
+  }) => {
+    const now = new Date();
+    const nextNumber = state.emitter.ultimoNumeroFactura + 1;
+    const docNum = String(nextNumber).padStart(7, "0");
+    const fullNumber = `${state.emitter.establecimiento}-${state.emitter.puntoExpedicion}-${docNum}`;
+    const cdc = generateSifenCDC({
+      emitter: state.emitter,
+      documentNumber: nextNumber,
+      issuedAt: now,
+    });
+    const totals = computeSaleTotals(params.items);
+    const customerDoc =
+      params.customer.documentType === "RUC"
+        ? `${params.customer.documentNumber}-${params.customer.dv}`
+        : params.customer.documentNumber;
+
+    const newInvoice: SifenInvoice = {
+      id: `inv-${Date.now()}`,
+      saleNumber: nextNumber,
+      documentFullNumber: fullNumber,
+      cdc,
+      mode: state.emitter.sifenMode,
+      status: state.emitter.sifenMode === "mock" ? "APPROVED" : "QUEUED",
+      customer: params.customer,
+      paymentCondition: params.paymentCondition,
+      paymentMethod: params.paymentMethod,
+      items: params.items,
+      subtotalExenta: totals.subtotalExenta,
+      subtotalIva5: totals.subtotalIva5,
+      subtotalIva10: totals.subtotalIva10,
+      totalIva5: totals.totalIva5,
+      totalIva10: totals.totalIva10,
+      totalAmount: totals.totalAmount,
+      qrUrl: `https://ekuatia.set.gov.py/consultas-test/qr?nVersion=150&Id=${cdc}&cHashQR=MOCK`,
+      xmlPreview: buildSifenXmlPreview({
+        cdc,
+        emitter: state.emitter,
+        documentNumber: docNum,
+        customerName: params.customer.name,
+        customerDoc,
+        totalAmount: totals.totalAmount,
+        totalIva10: totals.totalIva10,
+        totalIva5: totals.totalIva5,
+        items: params.items,
+        issuedAtIso: now.toISOString(),
+      }),
+      sifenResponseCode: state.emitter.sifenMode === "mock" ? "0260" : "0300",
+      sifenResponseMsg:
+        state.emitter.sifenMode === "mock"
+          ? "Aprobado (Simulación local SIFEN_MODE=mock)"
+          : "En cola de lote asíncrono",
+      createdAt: now.toISOString(),
+    };
+
+    const newMovements: StockMovement[] = [];
+    const updatedProducts = state.products.map((p) => {
+      const sold = params.items.find((it) => it.productId === p.id);
+      if (!sold) return p;
+      const newStock = Math.max(0, p.stock - sold.quantity);
+      newMovements.push({
+        id: `mov-${Date.now()}-${p.id}`,
+        productId: p.id,
+        productName: p.name,
+        productSku: p.sku,
+        type: "SALE",
+        quantity: -sold.quantity,
+        previousStock: p.stock,
+        newStock,
+        notes: `Venta #${nextNumber} · DE ${fullNumber}`,
+        createdAt: now.toISOString(),
+      });
+      return { ...p, stock: newStock };
+    });
+
+    setState((prev) => ({
+      ...prev,
+      emitter: { ...prev.emitter, ultimoNumeroFactura: nextNumber },
+      products: updatedProducts,
+      movements: [...newMovements, ...prev.movements],
+      invoices: [newInvoice, ...prev.invoices],
+    }));
+
+    setSelectedInvoice(newInvoice);
+    showToast(`Factura Electrónica ${fullNumber} emitida`);
+  };
+
+  const handleCancelInvoice = (invoiceId: string) => {
+    setState((prev) => ({
+      ...prev,
+      invoices: prev.invoices.map((inv) =>
+        inv.id === invoiceId
+          ? {
+              ...inv,
+              status: "CANCELLED",
+              sifenResponseCode: "0600",
+              sifenResponseMsg: "Evento de cancelación registrado",
+            }
+          : inv
+      ),
+    }));
+    showToast("Evento de cancelación SIFEN registrado");
+  };
+
+  const handleResetDemo = () => {
+    window.localStorage.removeItem(STORAGE_KEY);
+    setState({
+      emitter: INITIAL_EMITTER,
+      products: INITIAL_PRODUCTS,
+      customers: INITIAL_CUSTOMERS,
+      movements: INITIAL_MOVEMENTS,
+      invoices: createInitialInvoices(),
+    });
+    showToast("Datos de demostración restaurados");
+  };
+
+  const lowStockCount = state.products.filter((p) => p.active && p.stock <= p.minStock).length;
+  const activeMode = state.emitter.sifenMode ?? health?.sifenMode ?? "mock";
+  const modeBadge = SIFEN_BADGE[activeMode];
 
   return (
-    <div className="min-h-screen bg-slate-50">
-      {showIntro && <IntroSplash key={introRunId} onFinish={handleIntroFinish} />}
+    <div className="flex min-h-screen bg-slate-50 text-slate-900">
+      {showIntro && (
+        <IntroSplash key={introRunId} onFinish={() => setShowIntro(false)} />
+      )}
 
-      {/* Top Bar con acento Tricolor Paraguayo */}
-      <header className="sticky top-0 z-20 border-b border-slate-200/80 bg-white/90 backdrop-blur">
-        <div className="flex h-[3px] w-full">
-          <span className="h-full flex-1 bg-[#D52B1E]" />
-          <span className="h-full flex-1 bg-slate-100" />
-          <span className="h-full flex-1 bg-[#0038A8]" />
-        </div>
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-3.5">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#060E24] text-white shadow-sm ring-1 ring-amber-400/20">
-              <EmuBoxLogo className="h-7 w-7" />
-            </div>
-            <div>
-              <h1 className="font-display text-lg font-bold tracking-tight text-slate-900">
-                Ñemu<span className="text-[#0038A8]">box</span>
-              </h1>
-              <p className="text-xs text-slate-500">
-                Stock, POS y Facturación Electrónica · Paraguay (SIFEN v150)
-              </p>
-            </div>
+      <Sidebar
+        activeSection={activeSection}
+        onSelect={setActiveSection}
+        lowStockCount={lowStockCount}
+        invoiceCount={state.invoices.length}
+        sifenMode={activeMode}
+        onReplayIntro={() => {
+          setIntroRunId((n) => n + 1);
+          setShowIntro(true);
+        }}
+        mobileOpen={mobileMenuOpen}
+        onCloseMobile={() => setMobileMenuOpen(false)}
+      />
+
+      <div className="flex min-w-0 flex-1 flex-col">
+        {/* Topbar */}
+        <header className="sticky top-0 z-20 border-b border-slate-200/80 bg-white/90 backdrop-blur">
+          <div className="flex h-[3px] w-full lg:hidden">
+            <span className="h-full flex-1 bg-[#D52B1E]" />
+            <span className="h-full flex-1 bg-slate-100" />
+            <span className="h-full flex-1 bg-[#0038A8]" />
           </div>
-
-          <div className="flex items-center gap-2.5">
-            <span
-              className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold ${modeBadge.classes}`}
-            >
-              <ShieldCheck className="h-3.5 w-3.5" />
-              {modeBadge.label}
-            </span>
-            <button
-              type="button"
-              onClick={replayIntro}
-              title="Repetir animación de entrada"
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:border-[#0038A8]/40 hover:bg-blue-50/50 hover:text-[#0038A8]"
-            >
-              <Sparkles className="h-3.5 w-3.5 text-amber-500" />
-              Ver intro
-            </button>
-            <button
-              type="button"
-              onClick={() => void loadData()}
-              disabled={loading}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-100 disabled:opacity-50"
-            >
-              <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-              Actualizar
-            </button>
-          </div>
-        </div>
-      </header>
-
-      <main
-        key={`content-${introRunId}`}
-        className="mx-auto max-w-6xl space-y-6 px-6 py-8"
-      >
-        {error && (
-          <div className="flex items-center gap-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
-            <AlertTriangle className="h-5 w-5 shrink-0" />
-            <div>
-              <p className="font-semibold">Error de conexión con el backend</p>
-              <p className="text-xs text-rose-700">{error}</p>
-            </div>
-          </div>
-        )}
-
-        {/* Estado de servicios y Emisor */}
-        <section
-          className={`grid gap-4 md:grid-cols-2 ${!showIntro ? "emubox-stagger" : "opacity-0"}`}
-          style={staggerStyle(0)}
-        >
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-800">
-                <Database className="h-4 w-4 text-slate-500" />
-                Estado de la infraestructura
-              </h2>
-              <span
-                className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                  health?.status === "ok"
-                    ? "bg-emerald-100 text-emerald-700"
-                    : "bg-slate-100 text-slate-600"
-                }`}
+          <div className="flex items-center justify-between gap-4 px-4 py-3 sm:px-6">
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setMobileMenuOpen(true)}
+                aria-label="Abrir menú de navegación"
+                className="rounded-lg border border-slate-200 p-2 text-slate-700 hover:bg-slate-100 lg:hidden"
               >
-                <CheckCircle2 className="h-3.5 w-3.5" />
-                {health?.status === "ok" ? "Operativo" : "Verificando..."}
-              </span>
+                <Menu className="h-4 w-4" />
+              </button>
+              <div>
+                <h1 className="font-display text-base font-bold text-slate-900 sm:text-lg">
+                  {SECTION_TITLE[activeSection]}
+                </h1>
+              </div>
             </div>
-            <dl className="grid grid-cols-2 gap-3 text-sm">
-              <div className="rounded-lg bg-slate-50 p-3">
-                <dt className="text-xs text-slate-500">API</dt>
-                <dd className="font-semibold text-slate-900">
-                  {health ? `${health.service} v${health.version}` : "—"}
-                </dd>
-              </div>
-              <div className="rounded-lg bg-slate-50 p-3">
-                <dt className="text-xs text-slate-500">PostgreSQL</dt>
-                <dd className="font-semibold text-emerald-700">
-                  {health?.database === "connected" ? "Conectado" : "—"}
-                </dd>
-              </div>
-            </dl>
+
+            <div className="flex items-center gap-2">
+              <span
+                className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-semibold ${modeBadge.classes}`}
+              >
+                <ShieldCheck className="h-3.5 w-3.5" />
+                {modeBadge.label}
+              </span>
+              <button
+                type="button"
+                onClick={() => void loadBackendStatus()}
+                disabled={refreshing}
+                title="Sincronizar estado del servidor"
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+              >
+                <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} />
+                <span className="hidden sm:inline">Sincronizar</span>
+              </button>
+            </div>
           </div>
+        </header>
 
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-800">
-              <FileText className="h-4 w-4 text-slate-500" />
-              Emisor configurado (DNIT / e-Kuatia)
-            </h2>
-            {status?.emitter ? (
-              <dl className="grid grid-cols-2 gap-3 text-sm">
-                <div className="col-span-2 rounded-lg bg-slate-50 p-3">
-                  <dt className="text-xs text-slate-500">Razón Social</dt>
-                  <dd className="font-semibold text-slate-900">{status.emitter.razonSocial}</dd>
-                </div>
-                <div className="rounded-lg bg-slate-50 p-3">
-                  <dt className="text-xs text-slate-500">RUC</dt>
-                  <dd className="font-mono font-semibold text-slate-900">{status.emitter.ruc}</dd>
-                </div>
-                <div className="rounded-lg bg-slate-50 p-3">
-                  <dt className="text-xs text-slate-500">Timbrado / Punto</dt>
-                  <dd className="font-mono font-semibold text-slate-900">
-                    {status.emitter.timbrado} ({status.emitter.puntoVenta})
-                  </dd>
-                </div>
-              </dl>
-            ) : (
-              <p className="text-sm text-slate-500">Cargando datos del emisor...</p>
-            )}
-          </div>
-        </section>
+        {/* Contenido principal */}
+        <main className="mx-auto w-full max-w-7xl flex-1 p-4 sm:p-6">
+          {activeSection === "dashboard" && (
+            <DashboardView
+              health={health}
+              systemStatus={systemStatus}
+              emitter={state.emitter}
+              products={state.products}
+              invoices={state.invoices}
+              onNavigate={setActiveSection}
+              onOpenInvoice={setSelectedInvoice}
+            />
+          )}
 
-        {/* KPIs iniciales */}
-        <section
-          className={`grid gap-4 sm:grid-cols-2 lg:grid-cols-4 ${
-            !showIntro ? "emubox-stagger" : "opacity-0"
-          }`}
-          style={staggerStyle(90)}
-        >
-          <KpiCard
-            icon={<Box className="h-5 w-5 text-indigo-600" />}
-            label="Productos activos"
-            value={status?.counts.products ?? 0}
-            hint="Con soporte IVA 10%, 5% y Exenta"
-          />
-          <KpiCard
-            icon={<AlertTriangle className="h-5 w-5 text-amber-600" />}
-            label="Alertas stock mínimo"
-            value={status?.counts.lowStockProducts ?? 0}
-            hint="Productos en o debajo del mínimo"
-            highlight={(status?.counts.lowStockProducts ?? 0) > 0}
-          />
-          <KpiCard
-            icon={<Users className="h-5 w-5 text-sky-600" />}
-            label="Clientes registrados"
-            value={status?.counts.customers ?? 0}
-            hint="Consumidor final + contribuyentes"
-          />
-          <KpiCard
-            icon={<FileText className="h-5 w-5 text-emerald-600" />}
-            label="Documentos SIFEN"
-            value={status?.counts.sifenDocuments ?? 0}
-            hint={`Ventas totales: ${status?.counts.sales ?? 0}`}
-          />
-        </section>
+          {activeSection === "stock" && (
+            <StockView
+              products={state.products}
+              movements={state.movements}
+              onSaveProduct={handleSaveProduct}
+              onAdjustStock={handleAdjustStock}
+            />
+          )}
 
-        {/* Hoja de ruta de módulos */}
-        <section
-          className={`rounded-2xl border border-slate-200 bg-white p-6 shadow-sm ${
-            !showIntro ? "emubox-stagger" : "opacity-0"
-          }`}
-          style={staggerStyle(180)}
-        >
-          <h2 className="mb-4 text-sm font-semibold text-slate-800">
-            Módulos del sistema (Avance por fases)
-          </h2>
-          <div className="divide-y divide-slate-100">
-            {(status?.modules ?? []).map((mod, idx) => (
-              <div key={mod.id} className="flex items-center justify-between py-3">
-                <div className="flex items-center gap-3">
-                  <span className="flex h-6 w-6 items-center justify-center rounded-full bg-slate-100 text-xs font-bold text-slate-700">
-                    {idx + 1}
-                  </span>
-                  <span className="text-sm font-medium text-slate-800">{mod.name}</span>
-                </div>
-                {mod.status === "ready" ? (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-semibold text-emerald-700">
-                    <CheckCircle2 className="h-3.5 w-3.5" />
-                    Listo
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600">
-                    <Clock className="h-3.5 w-3.5" />
-                    Próxima fase
-                  </span>
-                )}
-              </div>
-            ))}
-          </div>
-        </section>
-      </main>
-    </div>
-  );
-}
+          {activeSection === "pos" && (
+            <PosView
+              products={state.products}
+              customers={state.customers}
+              onCreateCustomer={handleCreateCustomer}
+              onCompleteSale={handleCompleteSale}
+            />
+          )}
 
-function KpiCard({
-  icon,
-  label,
-  value,
-  hint,
-  highlight = false,
-}: {
-  icon: ReactNode;
-  label: string;
-  value: number;
-  hint: string;
-  highlight?: boolean;
-}) {
-  return (
-    <div
-      className={`rounded-2xl border p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
-        highlight ? "border-amber-300 bg-amber-50/50" : "border-slate-200 bg-white"
-      }`}
-    >
-      <div className="mb-3 flex items-center justify-between">
-        <span className="text-xs font-medium text-slate-600">{label}</span>
-        {icon}
+          {activeSection === "sifen" && (
+            <SifenView
+              invoices={state.invoices}
+              onOpenInvoice={setSelectedInvoice}
+              onCancelInvoice={handleCancelInvoice}
+            />
+          )}
+
+          {activeSection === "settings" && (
+            <SettingsView
+              emitter={state.emitter}
+              onSaveEmitter={(updated) => {
+                setState((prev) => ({ ...prev, emitter: updated }));
+                showToast("Configuración del emisor guardada");
+              }}
+              onResetDemo={handleResetDemo}
+            />
+          )}
+        </main>
       </div>
-      <p className="font-display text-3xl font-bold tracking-tight text-slate-900">{value}</p>
-      <p className="mt-1 text-xs text-slate-500">{hint}</p>
+
+      {/* Modal global KuDE / XML SIFEN v150 */}
+      <KudeModal
+        invoice={selectedInvoice}
+        emitter={state.emitter}
+        onClose={() => setSelectedInvoice(null)}
+      />
+
+      {/* Toast liviano */}
+      {toast && (
+        <div
+          role="status"
+          className="fixed right-5 bottom-5 z-40 rounded-xl bg-[#060E24] px-4 py-2.5 text-xs font-semibold text-white shadow-lg ring-1 ring-amber-400/30"
+        >
+          {toast}
+        </div>
+      )}
     </div>
   );
 }

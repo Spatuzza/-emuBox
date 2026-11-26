@@ -65,11 +65,11 @@ export async function healthRoutes(app: FastifyInstance) {
         sifenDocuments: sifenDocCount,
       },
       modules: [
-        { id: "infra", name: "Infraestructura y Base de Datos", status: "ready" },
-        { id: "stock", name: "Productos, IVA PY y Kardex", status: "planned" },
-        { id: "pos-sifen-mock", name: "POS + SIFEN v150 (Modo Mock + KuDE)", status: "planned" },
-        { id: "sifen-lotes", name: "Conector SIFEN Test/Prod (.p12 + Lotes)", status: "planned" },
-        { id: "network", name: "Red segura (Caddy HTTPS / Cloudflare Tunnel)", status: "planned" },
+        { id: "infra-ui", name: "Infraestructura Docker, BD y Frontend completo", status: "ready" },
+        { id: "stock-api", name: "API Productos, IVA PY, Clientes y Kardex (PostgreSQL)", status: "planned" },
+        { id: "pos-sifen-mock", name: "API Ventas + Motor SIFEN v150 (XML + CDC + KuDE PDF)", status: "planned" },
+        { id: "sifen-lotes", name: "Firma .p12 + Worker de Lotes SIFEN Test/Prod", status: "planned" },
+        { id: "network", name: "Red segura (Caddy HTTPS / Cloudflare Tunnel CGNAT)", status: "planned" },
       ],
       timestamp: new Date().toISOString(),
     };

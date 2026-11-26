@@ -2,15 +2,15 @@
 
 Sistema **open-source**, liviano y auto-hospedable pensado para comercios y PyMEs de Paraguay que necesitan controlar su inventario, vender desde un punto de venta simple y emitir **Facturas Electrónicas (SIFEN / e-Kuatia v150)**.
 
-## Características principales (Plan por fases)
+## Hoja de ruta (Plan por fases)
 
 | Fase | Rama | Alcance | Estado |
 | :--- | :--- | :--- | :--- |
-| **Parte 1** | `feat/01-infra` | Docker Compose, PostgreSQL, esquema de datos Paraguay/SIFEN, API Fastify + Web React conectados | En progreso |
-| **Parte 2** | `feat/02-stock` | ABM de productos, tasas IVA PY (`10%`, `5%`, `Exenta`), Kardex de movimientos y alertas de stock mínimo | Pendiente |
-| **Parte 3** | `feat/03-pos-sifen-mock` | Caja rápida (descuento de stock transaccional), XML v150, cálculo de CDC (44 dígitos), QR y KuDE PDF en modo `mock` | Pendiente |
-| **Parte 4** | `feat/04-sifen-test-lotes` | Firma XMLDSig (`.p12`), envío por lotes asíncrono a `sifen-test.set.gov.py`, consulta RUC y eventos | Pendiente |
-| **Parte 5** | `feat/05-red-despliegue` | Reverse proxy Caddy HTTPS, monitor de IP pública / DDNS y perfil opcional de Cloudflare Tunnel (CGNAT) | Pendiente |
+| **Parte 1** | `feat/01-infra` | Docker Compose, PostgreSQL + esquema SIFEN v150, API base + **Frontend completo** (Intro patriótica, Resumen, Stock/Kardex, Caja POS, KuDE 80mm/A4, SIFEN y Configuración) | Completada |
+| **Parte 2** | `feat/02-stock-api` | Backend REST de Productos (IVA PY `10%`/`5%`/`Exenta`), Kardex auditable, Clientes (RUC + DV) y conexión real del frontend a PostgreSQL | Siguiente |
+| **Parte 3** | `feat/03-pos-sifen-mock` | Endpoint transaccional de Ventas (descuento atómico de stock + Kardex) + motor SIFEN v150 en backend (XML oficial, CDC real, QR con hash CSC y KuDE PDF descargable en modo `mock`) | Pendiente |
+| **Parte 4** | `feat/04-sifen-test-lotes` | Firma XMLDSig con certificado `.p12`, cola/worker de lotes asíncronos (hasta 50 DEs) contra `sifen-test.set.gov.py`, consulta RUC y eventos (cancelación/inutilización) | Pendiente |
+| **Parte 5** | `feat/05-red-despliegue` | Reverse proxy Caddy HTTPS, monitor de IP pública / DDNS, perfil opcional de Cloudflare Tunnel (CGNAT) y guía de despliegue en producción | Pendiente |
 
 ## Modos SIFEN
 

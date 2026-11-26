@@ -90,6 +90,10 @@ export interface Product {
   stock: number;
   minStock: number;
   active: boolean;
+  hasImage?: boolean;
+  imageUrl?: string;
+  imageSource?: string;
+  imageSizeBytes?: number;
 }
 
 export interface StockMovement {

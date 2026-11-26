@@ -7,13 +7,13 @@ import {
   ShieldCheck,
   Wifi,
 } from "lucide-react";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useEffect, useState } from "react";
 import { calculateMod11DV } from "../lib/format";
 import type { EmitterProfile, SifenMode } from "../types/domain";
 
 interface SettingsViewProps {
   emitter: EmitterProfile;
-  onSaveEmitter: (emitter: EmitterProfile) => void;
+  onSaveEmitter: (emitter: EmitterProfile) => Promise<void>;
   onResetDemo: () => void;
 }
 
@@ -21,9 +21,13 @@ export function SettingsView({ emitter, onSaveEmitter, onResetDemo }: SettingsVi
   const [form, setForm] = useState<EmitterProfile>(emitter);
   const [savedBanner, setSavedBanner] = useState(false);
 
-  const handleSubmit = (e: FormEvent) => {
+  useEffect(() => {
+    setForm(emitter);
+  }, [emitter]);
+
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    onSaveEmitter({
+    await onSaveEmitter({
       ...form,
       dv: calculateMod11DV(form.ruc),
       establecimiento: form.establecimiento.padStart(3, "0").slice(-3),
@@ -58,7 +62,7 @@ export function SettingsView({ emitter, onSaveEmitter, onResetDemo }: SettingsVi
       <div className="grid gap-6 lg:grid-cols-12">
         {/* Formulario del Emisor */}
         <form
-          onSubmit={handleSubmit}
+          onSubmit={(e) => void handleSubmit(e)}
           className="space-y-4 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm lg:col-span-7"
         >
           <div className="flex items-center justify-between border-b border-slate-100 pb-3">

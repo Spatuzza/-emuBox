@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { IntroSplash } from "./components/IntroSplash";
 import { KudeModal } from "./components/KudeModal";
 import { Sidebar } from "./components/Sidebar";
+import { api } from "./lib/api";
 import {
   buildSifenXmlPreview,
   computeSaleTotals,
@@ -35,32 +36,16 @@ import { SettingsView } from "./views/SettingsView";
 import { SifenView } from "./views/SifenView";
 import { StockView } from "./views/StockView";
 
-const STORAGE_KEY = "nemubox_demo_state_v1";
+const INVOICES_STORAGE_KEY = "nemubox_sifen_invoices_v1";
 
-interface PersistedState {
-  emitter: EmitterProfile;
-  products: Product[];
-  customers: Customer[];
-  movements: StockMovement[];
-  invoices: SifenInvoice[];
-}
-
-function loadInitialState(): PersistedState {
+function loadInvoices(): SifenInvoice[] {
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      return JSON.parse(raw) as PersistedState;
-    }
+    const raw = window.localStorage.getItem(INVOICES_STORAGE_KEY);
+    if (raw) return JSON.parse(raw) as SifenInvoice[];
   } catch {
-    // Fallback a seed inicial
+    // Fallback
   }
-  return {
-    emitter: INITIAL_EMITTER,
-    products: INITIAL_PRODUCTS,
-    customers: INITIAL_CUSTOMERS,
-    movements: INITIAL_MOVEMENTS,
-    invoices: createInitialInvoices(),
-  };
+  return createInitialInvoices();
 }
 
 const SECTION_TITLE: Record<AppSection, string> = {
@@ -92,56 +77,64 @@ export default function App() {
   const [activeSection, setActiveSection] = useState<AppSection>("dashboard");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  // Estado local interactivo (preparado para conectar a endpoints Parte 2/3)
-  const [state, setState] = useState<PersistedState>(loadInitialState);
-  const [selectedInvoice, setSelectedInvoice] = useState<SifenInvoice | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
+  // Datos reales desde PostgreSQL (con fallback inicial en caso de arranque en frío)
+  const [emitter, setEmitter] = useState<EmitterProfile>(INITIAL_EMITTER);
+  const [products, setProducts] = useState<Product[]>(INITIAL_PRODUCTS);
+  const [customers, setCustomers] = useState<Customer[]>(INITIAL_CUSTOMERS);
+  const [movements, setMovements] = useState<StockMovement[]>(INITIAL_MOVEMENTS);
 
-  // Estado en vivo del backend Docker (/api/health y /api/system/status)
+  // Comprobantes SIFEN locales hasta Parte 3 (ventas ya descuentan stock real en PostgreSQL)
+  const [invoices, setInvoices] = useState<SifenInvoice[]>(loadInvoices);
+  const [selectedInvoice, setSelectedInvoice] = useState<SifenInvoice | null>(null);
+  const [toast, setToast] = useState<{ text: string; tone?: "ok" | "err" } | null>(null);
+
+  // Salud en vivo del backend Docker
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [systemStatus, setSystemStatus] = useState<SystemStatusResponse | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
-  const showToast = useCallback((message: string) => {
-    setToast(message);
-    window.setTimeout(() => setToast(null), 3200);
+  const showToast = useCallback((text: string, tone: "ok" | "err" = "ok") => {
+    setToast({ text, tone });
+    window.setTimeout(() => setToast(null), 3600);
   }, []);
 
   useEffect(() => {
     try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+      window.localStorage.setItem(INVOICES_STORAGE_KEY, JSON.stringify(invoices));
     } catch {
-      // Storage lleno o deshabilitado
+      // Storage deshabilitado
     }
-  }, [state]);
+  }, [invoices]);
 
-  const loadBackendStatus = useCallback(async () => {
+  const syncFromBackend = useCallback(async () => {
     setRefreshing(true);
     try {
-      const [healthRes, statusRes] = await Promise.all([
-        fetch("/api/health"),
-        fetch("/api/system/status"),
+      const [h, s, em, prods, movs, custs] = await Promise.all([
+        api.getHealth(),
+        api.getSystemStatus(),
+        api.getEmitter(),
+        api.listProducts(),
+        api.listMovements(150),
+        api.listCustomers(),
       ]);
-      if (healthRes.ok && statusRes.ok) {
-        const [h, s] = await Promise.all([
-          healthRes.json() as Promise<HealthResponse>,
-          statusRes.json() as Promise<SystemStatusResponse>,
-        ]);
-        setHealth(h);
-        setSystemStatus(s);
-      }
+      setHealth(h);
+      setSystemStatus(s);
+      setEmitter(em);
+      setProducts(prods);
+      setMovements(movs);
+      setCustomers(custs);
     } catch {
-      // Modo offline / backend detenido
+      // Si el backend no responde, mantenemos el estado cargado
     } finally {
       setRefreshing(false);
     }
   }, []);
 
   useEffect(() => {
-    void loadBackendStatus();
-  }, [loadBackendStatus]);
+    void syncFromBackend();
+  }, [syncFromBackend]);
 
-  // Atajos de teclado rápidos de caja (F2 = POS, F3 = Stock)
+  // Atajos rápidos de caja (F2 = POS, F3 = Stock)
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "F2") {
@@ -156,109 +149,138 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  const handleSaveProduct = (input: Omit<Product, "id"> & { id?: string }) => {
-    setState((prev) => {
+  const handleSaveProduct = async (input: Omit<Product, "id"> & { id?: string }) => {
+    try {
       if (input.id) {
-        return {
-          ...prev,
-          products: prev.products.map((p) =>
-            p.id === input.id ? { ...p, ...input, id: p.id } : p
-          ),
-        };
+        const updated = await api.updateProduct(input.id, input);
+        setProducts((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+        showToast("Producto actualizado en PostgreSQL");
+      } else {
+        const created = await api.createProduct(input);
+        setProducts((prev) => [...prev, created].sort((a, b) => a.name.localeCompare(b.name)));
+        const movs = await api.listMovements(150);
+        setMovements(movs);
+        showToast("Producto creado y guardado en PostgreSQL");
       }
-      const newProduct: Product = {
-        ...input,
-        id: `prod-${Date.now()}`,
-      };
-      const initialMove: StockMovement = {
-        id: `mov-${Date.now()}`,
-        productId: newProduct.id,
-        productName: newProduct.name,
-        productSku: newProduct.sku,
-        type: "IN",
-        quantity: newProduct.stock,
-        previousStock: 0,
-        newStock: newProduct.stock,
-        notes: "Alta de producto en catálogo",
-        createdAt: new Date().toISOString(),
-      };
-      return {
-        ...prev,
-        products: [newProduct, ...prev.products],
-        movements: newProduct.stock > 0 ? [initialMove, ...prev.movements] : prev.movements,
-      };
-    });
-    showToast(input.id ? "Producto actualizado" : "Producto creado en el catálogo");
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Error guardando producto", "err");
+      throw err;
+    }
   };
 
-  const handleAdjustStock = (params: {
+  const handleAdjustStock = async (params: {
     productId: string;
     type: StockMovementType;
     quantity: number;
     notes: string;
   }) => {
-    setState((prev) => {
-      const target = prev.products.find((p) => p.id === params.productId);
-      if (!target) return prev;
-
-      const prevStock = target.stock;
-      let newStock = prevStock;
-      let delta = params.quantity;
-
-      if (params.type === "IN") {
-        newStock = prevStock + params.quantity;
-        delta = params.quantity;
-      } else if (params.type === "OUT") {
-        newStock = Math.max(0, prevStock - params.quantity);
-        delta = -(prevStock - newStock);
-      } else {
-        newStock = Math.max(0, params.quantity);
-        delta = newStock - prevStock;
-      }
-
-      const movement: StockMovement = {
-        id: `mov-${Date.now()}`,
-        productId: target.id,
-        productName: target.name,
-        productSku: target.sku,
-        type: params.type,
-        quantity: delta,
-        previousStock: prevStock,
-        newStock,
-        notes: params.notes,
-        createdAt: new Date().toISOString(),
-      };
-
-      return {
-        ...prev,
-        products: prev.products.map((p) =>
-          p.id === target.id ? { ...p, stock: newStock } : p
-        ),
-        movements: [movement, ...prev.movements],
-      };
-    });
-    showToast("Movimiento de Kardex registrado");
+    try {
+      const res = await api.createMovement(params);
+      setProducts((prev) =>
+        prev.map((p) => (p.id === params.productId ? { ...p, stock: res.newStock } : p))
+      );
+      setMovements((prev) => [res.movement, ...prev]);
+      showToast("Movimiento de Kardex guardado en PostgreSQL");
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Error en Kardex", "err");
+      throw err;
+    }
   };
 
-  const handleCreateCustomer = (input: Omit<Customer, "id">): Customer => {
-    const created: Customer = { ...input, id: `cust-${Date.now()}` };
-    setState((prev) => ({ ...prev, customers: [...prev.customers, created] }));
-    showToast(`Cliente ${created.name} registrado`);
-    return created;
+  const handleUploadImage = async (productId: string, dataUrl: string) => {
+    try {
+      const res = await api.uploadProductImage(productId, dataUrl);
+      setProducts((prev) =>
+        prev.map((p) =>
+          p.id === productId
+            ? {
+                ...p,
+                hasImage: res.hasImage,
+                imageUrl: res.imageUrl,
+                imageSource: res.imageSource,
+                imageSizeBytes: res.imageSizeBytes,
+              }
+            : p
+        )
+      );
+      showToast(`Foto guardada en PostgreSQL (${(res.imageSizeBytes / 1024).toFixed(1)} KB)`);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Error subiendo foto", "err");
+    }
   };
 
-  const handleCompleteSale = (params: {
+  const handleGenerateAiImage = async (productId: string, prompt?: string) => {
+    try {
+      const res = await api.generateProductImage(productId, prompt);
+      setProducts((prev) =>
+        prev.map((p) =>
+          p.id === productId
+            ? {
+                ...p,
+                hasImage: res.hasImage,
+                imageUrl: res.imageUrl,
+                imageSource: res.imageSource,
+                imageSizeBytes: res.imageSizeBytes,
+              }
+            : p
+        )
+      );
+      showToast(
+        res.message ??
+          `Miniatura guardada en PostgreSQL (${(res.imageSizeBytes / 1024).toFixed(1)} KB)`
+      );
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Error generando imagen IA", "err");
+    }
+  };
+
+  const handleDeleteImage = async (productId: string) => {
+    try {
+      await api.deleteProductImage(productId);
+      setProducts((prev) =>
+        prev.map((p) =>
+          p.id === productId
+            ? {
+                ...p,
+                hasImage: false,
+                imageUrl: undefined,
+                imageSource: undefined,
+                imageSizeBytes: undefined,
+              }
+            : p
+        )
+      );
+      showToast("Imagen eliminada de la base de datos");
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Error eliminando imagen", "err");
+    }
+  };
+
+  const handleCreateCustomer = async (input: Omit<Customer, "id">): Promise<Customer> => {
+    try {
+      const created = await api.createCustomer(input);
+      setCustomers((prev) => [...prev, created]);
+      showToast(`Cliente ${created.name} guardado en PostgreSQL`);
+      return created;
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Error registrando cliente", "err");
+      throw err;
+    }
+  };
+
+  const handleCompleteSale = async (params: {
     customer: Customer;
     paymentCondition: PaymentCondition;
     paymentMethod: PaymentMethod;
     items: SaleItem[];
   }) => {
     const now = new Date();
-    const nextNumber = state.emitter.ultimoNumeroFactura + 1;
+    const nextNumber =
+      Math.max(emitter.ultimoNumeroFactura, ...invoices.map((i) => i.saleNumber)) + 1;
     const docNum = String(nextNumber).padStart(7, "0");
-    const fullNumber = `${state.emitter.establecimiento}-${state.emitter.puntoExpedicion}-${docNum}`;
+    const fullNumber = `${emitter.establecimiento}-${emitter.puntoExpedicion}-${docNum}`;
     const cdc = generateSifenCDC({
-      emitter: state.emitter,
+      emitter,
       documentNumber: nextNumber,
       issuedAt: now,
     });
@@ -268,13 +290,33 @@ export default function App() {
         ? `${params.customer.documentNumber}-${params.customer.dv}`
         : params.customer.documentNumber;
 
+    // Descontar stock real y registrar Kardex SALE en PostgreSQL
+    try {
+      for (const item of params.items) {
+        await api.createMovement({
+          productId: item.productId,
+          type: "SALE",
+          quantity: item.quantity,
+          referenceType: "POS_SALE",
+          referenceId: fullNumber,
+          notes: `Venta POS #${nextNumber} · DE ${fullNumber}`,
+        });
+      }
+      const [prods, movs] = await Promise.all([api.listProducts(), api.listMovements(150)]);
+      setProducts(prods);
+      setMovements(movs);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Error descontando stock", "err");
+      return;
+    }
+
     const newInvoice: SifenInvoice = {
       id: `inv-${Date.now()}`,
       saleNumber: nextNumber,
       documentFullNumber: fullNumber,
       cdc,
-      mode: state.emitter.sifenMode,
-      status: state.emitter.sifenMode === "mock" ? "APPROVED" : "QUEUED",
+      mode: emitter.sifenMode,
+      status: emitter.sifenMode === "mock" ? "APPROVED" : "QUEUED",
       customer: params.customer,
       paymentCondition: params.paymentCondition,
       paymentMethod: params.paymentMethod,
@@ -288,7 +330,7 @@ export default function App() {
       qrUrl: `https://ekuatia.set.gov.py/consultas-test/qr?nVersion=150&Id=${cdc}&cHashQR=MOCK`,
       xmlPreview: buildSifenXmlPreview({
         cdc,
-        emitter: state.emitter,
+        emitter,
         documentNumber: docNum,
         customerName: params.customer.name,
         customerDoc,
@@ -298,50 +340,32 @@ export default function App() {
         items: params.items,
         issuedAtIso: now.toISOString(),
       }),
-      sifenResponseCode: state.emitter.sifenMode === "mock" ? "0260" : "0300",
+      sifenResponseCode: emitter.sifenMode === "mock" ? "0260" : "0300",
       sifenResponseMsg:
-        state.emitter.sifenMode === "mock"
+        emitter.sifenMode === "mock"
           ? "Aprobado (Simulación local SIFEN_MODE=mock)"
           : "En cola de lote asíncrono",
       createdAt: now.toISOString(),
     };
 
-    const newMovements: StockMovement[] = [];
-    const updatedProducts = state.products.map((p) => {
-      const sold = params.items.find((it) => it.productId === p.id);
-      if (!sold) return p;
-      const newStock = Math.max(0, p.stock - sold.quantity);
-      newMovements.push({
-        id: `mov-${Date.now()}-${p.id}`,
-        productId: p.id,
-        productName: p.name,
-        productSku: p.sku,
-        type: "SALE",
-        quantity: -sold.quantity,
-        previousStock: p.stock,
-        newStock,
-        notes: `Venta #${nextNumber} · DE ${fullNumber}`,
-        createdAt: now.toISOString(),
-      });
-      return { ...p, stock: newStock };
-    });
-
-    setState((prev) => ({
-      ...prev,
-      emitter: { ...prev.emitter, ultimoNumeroFactura: nextNumber },
-      products: updatedProducts,
-      movements: [...newMovements, ...prev.movements],
-      invoices: [newInvoice, ...prev.invoices],
-    }));
-
+    setInvoices((prev) => [newInvoice, ...prev]);
     setSelectedInvoice(newInvoice);
-    showToast(`Factura Electrónica ${fullNumber} emitida`);
+    showToast(`Factura ${fullNumber} emitida · Stock descontado en BD`);
+  };
+
+  const handleSaveEmitter = async (updated: EmitterProfile) => {
+    try {
+      const saved = await api.updateEmitter(updated);
+      setEmitter(saved);
+      showToast("Emisor actualizado en PostgreSQL");
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Error guardando emisor", "err");
+    }
   };
 
   const handleCancelInvoice = (invoiceId: string) => {
-    setState((prev) => ({
-      ...prev,
-      invoices: prev.invoices.map((inv) =>
+    setInvoices((prev) =>
+      prev.map((inv) =>
         inv.id === invoiceId
           ? {
               ...inv,
@@ -350,25 +374,20 @@ export default function App() {
               sifenResponseMsg: "Evento de cancelación registrado",
             }
           : inv
-      ),
-    }));
+      )
+    );
     showToast("Evento de cancelación SIFEN registrado");
   };
 
   const handleResetDemo = () => {
-    window.localStorage.removeItem(STORAGE_KEY);
-    setState({
-      emitter: INITIAL_EMITTER,
-      products: INITIAL_PRODUCTS,
-      customers: INITIAL_CUSTOMERS,
-      movements: INITIAL_MOVEMENTS,
-      invoices: createInitialInvoices(),
-    });
-    showToast("Datos de demostración restaurados");
+    window.localStorage.removeItem(INVOICES_STORAGE_KEY);
+    setInvoices(createInitialInvoices());
+    void syncFromBackend();
+    showToast("Comprobantes demo reiniciados y BD sincronizada");
   };
 
-  const lowStockCount = state.products.filter((p) => p.active && p.stock <= p.minStock).length;
-  const activeMode = state.emitter.sifenMode ?? health?.sifenMode ?? "mock";
+  const lowStockCount = products.filter((p) => p.active && p.stock <= p.minStock).length;
+  const activeMode = emitter.sifenMode ?? health?.sifenMode ?? "mock";
   const modeBadge = SIFEN_BADGE[activeMode];
 
   return (
@@ -381,7 +400,7 @@ export default function App() {
         activeSection={activeSection}
         onSelect={setActiveSection}
         lowStockCount={lowStockCount}
-        invoiceCount={state.invoices.length}
+        invoiceCount={invoices.length}
         sifenMode={activeMode}
         onReplayIntro={() => {
           setIntroRunId((n) => n + 1);
@@ -409,11 +428,9 @@ export default function App() {
               >
                 <Menu className="h-4 w-4" />
               </button>
-              <div>
-                <h1 className="font-display text-base font-bold text-slate-900 sm:text-lg">
-                  {SECTION_TITLE[activeSection]}
-                </h1>
-              </div>
+              <h1 className="font-display text-base font-bold text-slate-900 sm:text-lg">
+                {SECTION_TITLE[activeSection]}
+              </h1>
             </div>
 
             <div className="flex items-center gap-2">
@@ -425,9 +442,9 @@ export default function App() {
               </span>
               <button
                 type="button"
-                onClick={() => void loadBackendStatus()}
+                onClick={() => void syncFromBackend()}
                 disabled={refreshing}
-                title="Sincronizar estado del servidor"
+                title="Sincronizar con PostgreSQL"
                 className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
               >
                 <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} />
@@ -443,9 +460,9 @@ export default function App() {
             <DashboardView
               health={health}
               systemStatus={systemStatus}
-              emitter={state.emitter}
-              products={state.products}
-              invoices={state.invoices}
+              emitter={emitter}
+              products={products}
+              invoices={invoices}
               onNavigate={setActiveSection}
               onOpenInvoice={setSelectedInvoice}
             />
@@ -453,17 +470,20 @@ export default function App() {
 
           {activeSection === "stock" && (
             <StockView
-              products={state.products}
-              movements={state.movements}
+              products={products}
+              movements={movements}
               onSaveProduct={handleSaveProduct}
               onAdjustStock={handleAdjustStock}
+              onUploadImage={handleUploadImage}
+              onGenerateAiImage={handleGenerateAiImage}
+              onDeleteImage={handleDeleteImage}
             />
           )}
 
           {activeSection === "pos" && (
             <PosView
-              products={state.products}
-              customers={state.customers}
+              products={products}
+              customers={customers}
               onCreateCustomer={handleCreateCustomer}
               onCompleteSale={handleCompleteSale}
             />
@@ -471,7 +491,7 @@ export default function App() {
 
           {activeSection === "sifen" && (
             <SifenView
-              invoices={state.invoices}
+              invoices={invoices}
               onOpenInvoice={setSelectedInvoice}
               onCancelInvoice={handleCancelInvoice}
             />
@@ -479,11 +499,8 @@ export default function App() {
 
           {activeSection === "settings" && (
             <SettingsView
-              emitter={state.emitter}
-              onSaveEmitter={(updated) => {
-                setState((prev) => ({ ...prev, emitter: updated }));
-                showToast("Configuración del emisor guardada");
-              }}
+              emitter={emitter}
+              onSaveEmitter={handleSaveEmitter}
               onResetDemo={handleResetDemo}
             />
           )}
@@ -493,7 +510,7 @@ export default function App() {
       {/* Modal global KuDE / XML SIFEN v150 */}
       <KudeModal
         invoice={selectedInvoice}
-        emitter={state.emitter}
+        emitter={emitter}
         onClose={() => setSelectedInvoice(null)}
       />
 
@@ -501,9 +518,13 @@ export default function App() {
       {toast && (
         <div
           role="status"
-          className="fixed right-5 bottom-5 z-40 rounded-xl bg-[#060E24] px-4 py-2.5 text-xs font-semibold text-white shadow-lg ring-1 ring-amber-400/30"
+          className={`fixed right-5 bottom-5 z-40 rounded-xl px-4 py-2.5 text-xs font-semibold text-white shadow-lg ${
+            toast.tone === "err"
+              ? "bg-rose-700 ring-1 ring-rose-300/40"
+              : "bg-[#060E24] ring-1 ring-amber-400/30"
+          }`}
         >
-          {toast}
+          {toast.text}
         </div>
       )}
     </div>

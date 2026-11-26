@@ -66,7 +66,7 @@ export async function healthRoutes(app: FastifyInstance) {
       },
       modules: [
         { id: "infra-ui", name: "Infraestructura Docker, BD y Frontend completo", status: "ready" },
-        { id: "stock-api", name: "API Productos, IVA PY, Clientes y Kardex (PostgreSQL)", status: "planned" },
+        { id: "stock-api", name: "API Productos, Fotos DB/IA, Clientes y Kardex", status: "ready" },
         { id: "pos-sifen-mock", name: "API Ventas + Motor SIFEN v150 (XML + CDC + KuDE PDF)", status: "planned" },
         { id: "sifen-lotes", name: "Firma .p12 + Worker de Lotes SIFEN Test/Prod", status: "planned" },
         { id: "network", name: "Red segura (Caddy HTTPS / Cloudflare Tunnel CGNAT)", status: "planned" },

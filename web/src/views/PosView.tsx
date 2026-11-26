@@ -31,13 +31,13 @@ import type {
 interface PosViewProps {
   products: Product[];
   customers: Customer[];
-  onCreateCustomer: (customer: Omit<Customer, "id">) => Customer;
+  onCreateCustomer: (customer: Omit<Customer, "id">) => Promise<Customer>;
   onCompleteSale: (params: {
     customer: Customer;
     paymentCondition: PaymentCondition;
     paymentMethod: PaymentMethod;
     items: SaleItem[];
-  }) => void;
+  }) => Promise<void>;
 }
 
 export function PosView({
@@ -140,9 +140,9 @@ export function PosView({
   const selectedCustomer =
     customers.find((c) => c.id === selectedCustomerId) ?? customers[0];
 
-  const handleCheckout = () => {
+  const handleCheckout = async () => {
     if (saleItems.length === 0 || !selectedCustomer) return;
-    onCompleteSale({
+    await onCompleteSale({
       customer: selectedCustomer,
       paymentCondition,
       paymentMethod,
@@ -151,11 +151,11 @@ export function PosView({
     setCart([]);
   };
 
-  const handleCreateCustomerSubmit = (e: FormEvent) => {
+  const handleCreateCustomerSubmit = async (e: FormEvent) => {
     e.preventDefault();
     const cleanDoc = custDocNum.replace(/\D/g, "");
     if (!cleanDoc || !custName.trim()) return;
-    const created = onCreateCustomer({
+    const created = await onCreateCustomer({
       documentType: custDocType,
       documentNumber: cleanDoc,
       dv: custDocType === "RUC" ? calculateMod11DV(cleanDoc) : undefined,
@@ -216,6 +216,19 @@ export function PosView({
                   <span className="absolute top-3 right-3 flex h-6 min-w-6 items-center justify-center rounded-full bg-[#0038A8] px-1.5 font-mono text-xs font-bold text-white">
                     {inCart}
                   </span>
+                )}
+
+                {p.imageUrl && (
+                  <div className="mb-3 flex h-24 w-full items-center justify-center overflow-hidden rounded-xl border border-slate-100 bg-slate-50/70 p-1.5">
+                    <img
+                      src={p.imageUrl}
+                      alt={p.name}
+                      loading="lazy"
+                      className={`h-full w-full transition duration-300 group-hover:scale-105 ${
+                        p.imageSource === "UPLOAD" ? "rounded-lg object-cover" : "object-contain"
+                      }`}
+                    />
+                  </div>
                 )}
 
                 <div>
@@ -423,7 +436,7 @@ export function PosView({
           <button
             type="button"
             disabled={saleItems.length === 0}
-            onClick={handleCheckout}
+            onClick={() => void handleCheckout()}
             className="flex w-full items-center justify-center gap-2 rounded-xl bg-[#D52B1E] px-4 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-[#b92217] disabled:cursor-not-allowed disabled:bg-slate-300"
           >
             <Receipt className="h-4 w-4" />
@@ -440,7 +453,7 @@ export function PosView({
         subtitle="Si ingresás un RUC, Ñemubox calcula automáticamente el Dígito Verificador (Módulo 11 DNIT)."
         maxWidthClass="max-w-md"
       >
-        <form onSubmit={handleCreateCustomerSubmit} className="space-y-4">
+        <form onSubmit={(e) => void handleCreateCustomerSubmit(e)} className="space-y-4">
           <div className="grid grid-cols-2 gap-2">
             {(["RUC", "CI"] as const).map((t) => (
               <button

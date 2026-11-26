@@ -10,6 +10,13 @@ const envSchema = z.object({
   SIFEN_CSC: z.string().default("ABCD0000000000000000000000000000"),
   SIFEN_CERT_PATH: z.string().default("/app/certs/certificado.p12"),
   SIFEN_CERT_PASSWORD: z.string().default(""),
+  AI_IMAGE_PROVIDER: z
+    .enum(["iconify", "pollinations", "cloudflare", "huggingface", "local"])
+    .default("iconify"),
+  POLLINATIONS_API_KEY: z.string().default(""),
+  CF_ACCOUNT_ID: z.string().default(""),
+  CF_API_TOKEN: z.string().default(""),
+  HF_API_TOKEN: z.string().default(""),
 });
 
 export type AppEnv = z.infer<typeof envSchema>;

@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+
+# Certificates & Secrets (NEVER commit .p12/.pfx!)
+certs/*.p12
+certs/*.pfx
+certs/*.pem
+certs/*.key
+certs/*.crt
+
+# Generated storage (XMLs / KuDE PDFs)
+storage/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS & Editors
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

@@ -10,7 +10,7 @@ function parseSifenMode(raw: string | undefined): SifenMode {
 }
 
 async function main() {
-  console.log("[seed] Verificando datos iniciales de emuBox...");
+  console.log("[seed] Verificando datos iniciales de Ñemubox...");
 
   // 1. Configuración del Emisor (singleton id=1)
   await prisma.emitterConfig.upsert({
@@ -22,8 +22,8 @@ async function main() {
       id: 1,
       ruc: process.env.EMITTER_RUC ?? "80012345",
       dv: process.env.EMITTER_DV ?? "6",
-      razonSocial: process.env.EMITTER_RAZON_SOCIAL ?? "Comercio Demo emuBox S.R.L.",
-      nombreFantasia: "emuBox Demo Store",
+      razonSocial: process.env.EMITTER_RAZON_SOCIAL ?? "Comercio Demo Ñemubox S.R.L.",
+      nombreFantasia: "Ñemubox Demo Store",
       timbrado: process.env.EMITTER_TIMBRADO ?? "12558946",
       establecimiento: process.env.EMITTER_ESTABLECIMIENTO ?? "001",
       puntoExpedicion: process.env.EMITTER_PUNTO_EXPEDICION ?? "001",

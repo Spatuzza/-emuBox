@@ -7,10 +7,12 @@ import {
   FileText,
   RefreshCw,
   ShieldCheck,
-  Store,
+  Sparkles,
   Users,
 } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useState } from "react";
+import { type CSSProperties, type ReactNode, useCallback, useEffect, useState } from "react";
+import { EmuBoxLogo } from "./components/EmuBoxLogo";
+import { IntroSplash } from "./components/IntroSplash";
 
 interface HealthResponse {
   status: "ok" | "error";
@@ -62,7 +64,13 @@ const SIFEN_BADGE: Record<string, { label: string; classes: string }> = {
   },
 };
 
+function staggerStyle(delayMs: number): CSSProperties {
+  return { "--stagger-delay": `${delayMs}ms` } as CSSProperties;
+}
+
 export default function App() {
+  const [showIntro, setShowIntro] = useState(true);
+  const [introRunId, setIntroRunId] = useState(0);
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [status, setStatus] = useState<SystemStatusResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -96,26 +104,44 @@ export default function App() {
     void loadData();
   }, [loadData]);
 
+  const handleIntroFinish = useCallback(() => {
+    setShowIntro(false);
+  }, []);
+
+  const replayIntro = () => {
+    setIntroRunId((n) => n + 1);
+    setShowIntro(true);
+  };
+
   const modeBadge = SIFEN_BADGE[status?.sifenMode ?? health?.sifenMode ?? "mock"];
 
   return (
     <div className="min-h-screen bg-slate-50">
-      {/* Top Bar */}
-      <header className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-4">
+      {showIntro && <IntroSplash key={introRunId} onFinish={handleIntroFinish} />}
+
+      {/* Top Bar con acento Tricolor Paraguayo */}
+      <header className="sticky top-0 z-20 border-b border-slate-200/80 bg-white/90 backdrop-blur">
+        <div className="flex h-[3px] w-full">
+          <span className="h-full flex-1 bg-[#D52B1E]" />
+          <span className="h-full flex-1 bg-slate-100" />
+          <span className="h-full flex-1 bg-[#0038A8]" />
+        </div>
+        <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-3.5">
           <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-900 text-white">
-              <Store className="h-5 w-5" />
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-[#060E24] text-white shadow-sm ring-1 ring-amber-400/20">
+              <EmuBoxLogo className="h-7 w-7" />
             </div>
             <div>
-              <h1 className="text-lg font-bold tracking-tight text-slate-900">emuBox</h1>
+              <h1 className="font-display text-lg font-bold tracking-tight text-slate-900">
+                Ñemu<span className="text-[#0038A8]">box</span>
+              </h1>
               <p className="text-xs text-slate-500">
                 Stock, POS y Facturación Electrónica · Paraguay (SIFEN v150)
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2.5">
             <span
               className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-semibold ${modeBadge.classes}`}
             >
@@ -124,9 +150,18 @@ export default function App() {
             </span>
             <button
               type="button"
+              onClick={replayIntro}
+              title="Repetir animación de entrada"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:border-[#0038A8]/40 hover:bg-blue-50/50 hover:text-[#0038A8]"
+            >
+              <Sparkles className="h-3.5 w-3.5 text-amber-500" />
+              Ver intro
+            </button>
+            <button
+              type="button"
               onClick={() => void loadData()}
               disabled={loading}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-100 disabled:opacity-50"
             >
               <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
               Actualizar
@@ -135,7 +170,10 @@ export default function App() {
         </div>
       </header>
 
-      <main className="mx-auto max-w-6xl space-y-6 px-6 py-8">
+      <main
+        key={`content-${introRunId}`}
+        className="mx-auto max-w-6xl space-y-6 px-6 py-8"
+      >
         {error && (
           <div className="flex items-center gap-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
             <AlertTriangle className="h-5 w-5 shrink-0" />
@@ -147,7 +185,10 @@ export default function App() {
         )}
 
         {/* Estado de servicios y Emisor */}
-        <section className="grid gap-4 md:grid-cols-2">
+        <section
+          className={`grid gap-4 md:grid-cols-2 ${!showIntro ? "emubox-stagger" : "opacity-0"}`}
+          style={staggerStyle(0)}
+        >
           <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-800">
@@ -210,7 +251,12 @@ export default function App() {
         </section>
 
         {/* KPIs iniciales */}
-        <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <section
+          className={`grid gap-4 sm:grid-cols-2 lg:grid-cols-4 ${
+            !showIntro ? "emubox-stagger" : "opacity-0"
+          }`}
+          style={staggerStyle(90)}
+        >
           <KpiCard
             icon={<Box className="h-5 w-5 text-indigo-600" />}
             label="Productos activos"
@@ -239,7 +285,12 @@ export default function App() {
         </section>
 
         {/* Hoja de ruta de módulos */}
-        <section className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+        <section
+          className={`rounded-2xl border border-slate-200 bg-white p-6 shadow-sm ${
+            !showIntro ? "emubox-stagger" : "opacity-0"
+          }`}
+          style={staggerStyle(180)}
+        >
           <h2 className="mb-4 text-sm font-semibold text-slate-800">
             Módulos del sistema (Avance por fases)
           </h2>
@@ -287,7 +338,7 @@ function KpiCard({
 }) {
   return (
     <div
-      className={`rounded-2xl border p-5 shadow-sm ${
+      className={`rounded-2xl border p-5 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${
         highlight ? "border-amber-300 bg-amber-50/50" : "border-slate-200 bg-white"
       }`}
     >
@@ -295,7 +346,7 @@ function KpiCard({
         <span className="text-xs font-medium text-slate-600">{label}</span>
         {icon}
       </div>
-      <p className="text-3xl font-bold tracking-tight text-slate-900">{value}</p>
+      <p className="font-display text-3xl font-bold tracking-tight text-slate-900">{value}</p>
       <p className="mt-1 text-xs text-slate-500">{hint}</p>
     </div>
   );

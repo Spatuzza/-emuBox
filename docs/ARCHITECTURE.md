@@ -1,8 +1,8 @@
-# Arquitectura Técnica — emuBox
+# Arquitectura Técnica — Ñemubox
 
 ## 1. Visión general
 
-`emuBox` está diseñado como un monorepo simple pensado para correr en una PC local, mini-PC o VPS mediante Docker Compose, minimizando la fricción operativa para comercios en Paraguay.
+`Ñemubox` está diseñado como un monorepo simple pensado para correr en una PC local, mini-PC o VPS mediante Docker Compose, minimizando la fricción operativa para comercios en Paraguay.
 
 ```mermaid
 flowchart LR

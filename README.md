@@ -1,4 +1,4 @@
-# emuBox — Stock, POS y Facturación Electrónica (SIFEN / Paraguay)
+# Ñemubox — Stock, POS y Facturación Electrónica (SIFEN / Paraguay)
 
 Sistema **open-source**, liviano y auto-hospedable pensado para comercios y PyMEs de Paraguay que necesitan controlar su inventario, vender desde un punto de venta simple y emitir **Facturas Electrónicas (SIFEN / e-Kuatia v150)**.
 

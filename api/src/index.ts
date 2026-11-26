@@ -34,7 +34,7 @@ process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
 try {
   await app.listen({ port: env.PORT, host: "0.0.0.0" });
-  app.log.info(`emuBox API escuchando en http://0.0.0.0:${env.PORT} (SIFEN_MODE=${env.SIFEN_MODE})`);
+  app.log.info(`Ñemubox API escuchando en http://0.0.0.0:${env.PORT} (SIFEN_MODE=${env.SIFEN_MODE})`);
 } catch (error) {
   app.log.error(error);
   await prisma.$disconnect();

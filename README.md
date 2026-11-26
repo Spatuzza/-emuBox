@@ -12,6 +12,7 @@ Sistema **open-source**, liviano y auto-hospedable pensado para comercios y PyME
 | **Parte 4** | `feat/04-db-bridge` | **Modo Bridge / Metamórfico**: introspección de BD existente (`information_schema`), Wizard de mapeo inteligente ES/PY (`schema-map.json`), modo Solo Lectura / descuento atómico, Sidecar para SIFEN + fotos, e importación / reinicio limpio de BD | Siguiente |
 | **Parte 5** | `feat/05-sifen-test-lotes` | Firma XMLDSig con certificado `.p12`, cola/worker de lotes asíncronos (hasta 50 DEs) contra `sifen-test.set.gov.py`, consulta RUC y eventos (cancelación/inutilización) | Pendiente |
 | **Parte 6** | `feat/06-red-despliegue` | Reverse proxy Caddy HTTPS, monitor de IP pública / DDNS, perfil opcional de Cloudflare Tunnel (CGNAT) y guía de despliegue en producción | Pendiente |
+| **Parte 7** | `feat/07-ha-db-sync` | **Modo HA y Sincronización de BD** ([ver spec](docs/FEATURE_HA_SYNC.md)): replicación PostgreSQL Primario/Réplica + modo Local Offline-First con espejo Cloud/Outbox y numeración SIFEN segura por nodo | Planificada |
 
 ## Modos SIFEN
 

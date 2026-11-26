@@ -138,6 +138,10 @@ export interface SifenInvoice {
   totalIva10: number;
   totalAmount: number;
   qrUrl: string;
+  qrImageUrl?: string;
+  kudeA4Url?: string;
+  kude80mmUrl?: string;
+  xmlDownloadUrl?: string;
   xmlPreview: string;
   sifenResponseCode: string;
   sifenResponseMsg: string;

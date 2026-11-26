@@ -1,4 +1,4 @@
-import { Ban, Check, Copy, FileCheck2, FileText, Search } from "lucide-react";
+import { Ban, Check, Copy, Download, FileCheck2, FileText, Search } from "lucide-react";
 import { useMemo, useState } from "react";
 import { formatDateTimePY, formatPYG } from "../lib/format";
 import type { SifenDocumentStatus, SifenInvoice } from "../types/domain";
@@ -6,7 +6,7 @@ import type { SifenDocumentStatus, SifenInvoice } from "../types/domain";
 interface SifenViewProps {
   invoices: SifenInvoice[];
   onOpenInvoice: (invoice: SifenInvoice) => void;
-  onCancelInvoice: (invoiceId: string) => void;
+  onCancelInvoice: (invoiceId: string) => Promise<void>;
 }
 
 export function SifenView({ invoices, onOpenInvoice, onCancelInvoice }: SifenViewProps) {
@@ -167,11 +167,21 @@ export function SifenView({ invoices, onOpenInvoice, onCancelInvoice }: SifenVie
                         <FileText className="h-3.5 w-3.5" />
                         KuDE / XML
                       </button>
+                      {inv.kudeA4Url && (
+                        <a
+                          href={`${inv.kudeA4Url}&download=1`}
+                          download
+                          title="Descargar KuDE PDF (A4)"
+                          className="rounded-lg border border-slate-200 bg-white p-1.5 text-slate-600 hover:border-[#0038A8]/40 hover:text-[#0038A8]"
+                        >
+                          <Download className="h-3.5 w-3.5" />
+                        </a>
+                      )}
                       {inv.status === "APPROVED" && (
                         <button
                           type="button"
-                          onClick={() => onCancelInvoice(inv.id)}
-                          title="Emitir evento de cancelación (hasta 48h)"
+                          onClick={() => void onCancelInvoice(inv.id)}
+                          title="Cancelar DE (hasta 48h · repone el stock automáticamente)"
                           className="rounded-lg border border-rose-200 bg-white p-1.5 text-rose-600 hover:bg-rose-50"
                         >
                           <Ban className="h-3.5 w-3.5" />

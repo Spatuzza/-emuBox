@@ -4,18 +4,7 @@ import { IntroSplash } from "./components/IntroSplash";
 import { KudeModal } from "./components/KudeModal";
 import { Sidebar } from "./components/Sidebar";
 import { api } from "./lib/api";
-import {
-  buildSifenXmlPreview,
-  computeSaleTotals,
-  generateSifenCDC,
-} from "./lib/format";
-import {
-  createInitialInvoices,
-  INITIAL_CUSTOMERS,
-  INITIAL_EMITTER,
-  INITIAL_MOVEMENTS,
-  INITIAL_PRODUCTS,
-} from "./lib/seedData";
+import { INITIAL_CUSTOMERS, INITIAL_EMITTER, INITIAL_MOVEMENTS, INITIAL_PRODUCTS } from "./lib/seedData";
 import type {
   AppSection,
   Customer,
@@ -35,18 +24,6 @@ import { PosView } from "./views/PosView";
 import { SettingsView } from "./views/SettingsView";
 import { SifenView } from "./views/SifenView";
 import { StockView } from "./views/StockView";
-
-const INVOICES_STORAGE_KEY = "nemubox_sifen_invoices_v1";
-
-function loadInvoices(): SifenInvoice[] {
-  try {
-    const raw = window.localStorage.getItem(INVOICES_STORAGE_KEY);
-    if (raw) return JSON.parse(raw) as SifenInvoice[];
-  } catch {
-    // Fallback
-  }
-  return createInitialInvoices();
-}
 
 const SECTION_TITLE: Record<AppSection, string> = {
   dashboard: "Resumen General",
@@ -77,14 +54,12 @@ export default function App() {
   const [activeSection, setActiveSection] = useState<AppSection>("dashboard");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  // Datos reales desde PostgreSQL (con fallback inicial en caso de arranque en frío)
+  // 100% respaldado por PostgreSQL
   const [emitter, setEmitter] = useState<EmitterProfile>(INITIAL_EMITTER);
   const [products, setProducts] = useState<Product[]>(INITIAL_PRODUCTS);
   const [customers, setCustomers] = useState<Customer[]>(INITIAL_CUSTOMERS);
   const [movements, setMovements] = useState<StockMovement[]>(INITIAL_MOVEMENTS);
-
-  // Comprobantes SIFEN locales hasta Parte 3 (ventas ya descuentan stock real en PostgreSQL)
-  const [invoices, setInvoices] = useState<SifenInvoice[]>(loadInvoices);
+  const [invoices, setInvoices] = useState<SifenInvoice[]>([]);
   const [selectedInvoice, setSelectedInvoice] = useState<SifenInvoice | null>(null);
   const [toast, setToast] = useState<{ text: string; tone?: "ok" | "err" } | null>(null);
 
@@ -95,27 +70,20 @@ export default function App() {
 
   const showToast = useCallback((text: string, tone: "ok" | "err" = "ok") => {
     setToast({ text, tone });
-    window.setTimeout(() => setToast(null), 3600);
+    window.setTimeout(() => setToast(null), 3800);
   }, []);
-
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(INVOICES_STORAGE_KEY, JSON.stringify(invoices));
-    } catch {
-      // Storage deshabilitado
-    }
-  }, [invoices]);
 
   const syncFromBackend = useCallback(async () => {
     setRefreshing(true);
     try {
-      const [h, s, em, prods, movs, custs] = await Promise.all([
+      const [h, s, em, prods, movs, custs, docs] = await Promise.all([
         api.getHealth(),
         api.getSystemStatus(),
         api.getEmitter(),
         api.listProducts(),
         api.listMovements(150),
         api.listCustomers(),
+        api.listSifenDocuments(100),
       ]);
       setHealth(h);
       setSystemStatus(s);
@@ -123,8 +91,9 @@ export default function App() {
       setProducts(prods);
       setMovements(movs);
       setCustomers(custs);
+      setInvoices(docs);
     } catch {
-      // Si el backend no responde, mantenemos el estado cargado
+      // Backend temporalmente no disponible
     } finally {
       setRefreshing(false);
     }
@@ -230,7 +199,7 @@ export default function App() {
           `Miniatura guardada en PostgreSQL (${(res.imageSizeBytes / 1024).toFixed(1)} KB)`
       );
     } catch (err) {
-      showToast(err instanceof Error ? err.message : "Error generando imagen IA", "err");
+      showToast(err instanceof Error ? err.message : "Error generando miniatura", "err");
     }
   };
 
@@ -274,83 +243,34 @@ export default function App() {
     paymentMethod: PaymentMethod;
     items: SaleItem[];
   }) => {
-    const now = new Date();
-    const nextNumber =
-      Math.max(emitter.ultimoNumeroFactura, ...invoices.map((i) => i.saleNumber)) + 1;
-    const docNum = String(nextNumber).padStart(7, "0");
-    const fullNumber = `${emitter.establecimiento}-${emitter.puntoExpedicion}-${docNum}`;
-    const cdc = generateSifenCDC({
-      emitter,
-      documentNumber: nextNumber,
-      issuedAt: now,
-    });
-    const totals = computeSaleTotals(params.items);
-    const customerDoc =
-      params.customer.documentType === "RUC"
-        ? `${params.customer.documentNumber}-${params.customer.dv}`
-        : params.customer.documentNumber;
-
-    // Descontar stock real y registrar Kardex SALE en PostgreSQL
     try {
-      for (const item of params.items) {
-        await api.createMovement({
-          productId: item.productId,
-          type: "SALE",
-          quantity: item.quantity,
-          referenceType: "POS_SALE",
-          referenceId: fullNumber,
-          notes: `Venta POS #${nextNumber} · DE ${fullNumber}`,
-        });
-      }
-      const [prods, movs] = await Promise.all([api.listProducts(), api.listMovements(150)]);
+      const createdInvoice = await api.createSale({
+        customerId: params.customer.id,
+        paymentCondition: params.paymentCondition,
+        paymentMethod: params.paymentMethod,
+        items: params.items.map((it) => ({
+          productId: it.productId,
+          quantity: it.quantity,
+        })),
+      });
+
+      const [prods, movs, em, sys] = await Promise.all([
+        api.listProducts(),
+        api.listMovements(150),
+        api.getEmitter(),
+        api.getSystemStatus(),
+      ]);
       setProducts(prods);
       setMovements(movs);
+      setEmitter(em);
+      setSystemStatus(sys);
+      setInvoices((prev) => [createdInvoice, ...prev]);
+      setSelectedInvoice(createdInvoice);
+      showToast(`Factura Electrónica ${createdInvoice.documentFullNumber} emitida (SIFEN v150)`);
     } catch (err) {
-      showToast(err instanceof Error ? err.message : "Error descontando stock", "err");
-      return;
+      showToast(err instanceof Error ? err.message : "Error emitiendo factura", "err");
+      throw err;
     }
-
-    const newInvoice: SifenInvoice = {
-      id: `inv-${Date.now()}`,
-      saleNumber: nextNumber,
-      documentFullNumber: fullNumber,
-      cdc,
-      mode: emitter.sifenMode,
-      status: emitter.sifenMode === "mock" ? "APPROVED" : "QUEUED",
-      customer: params.customer,
-      paymentCondition: params.paymentCondition,
-      paymentMethod: params.paymentMethod,
-      items: params.items,
-      subtotalExenta: totals.subtotalExenta,
-      subtotalIva5: totals.subtotalIva5,
-      subtotalIva10: totals.subtotalIva10,
-      totalIva5: totals.totalIva5,
-      totalIva10: totals.totalIva10,
-      totalAmount: totals.totalAmount,
-      qrUrl: `https://ekuatia.set.gov.py/consultas-test/qr?nVersion=150&Id=${cdc}&cHashQR=MOCK`,
-      xmlPreview: buildSifenXmlPreview({
-        cdc,
-        emitter,
-        documentNumber: docNum,
-        customerName: params.customer.name,
-        customerDoc,
-        totalAmount: totals.totalAmount,
-        totalIva10: totals.totalIva10,
-        totalIva5: totals.totalIva5,
-        items: params.items,
-        issuedAtIso: now.toISOString(),
-      }),
-      sifenResponseCode: emitter.sifenMode === "mock" ? "0260" : "0300",
-      sifenResponseMsg:
-        emitter.sifenMode === "mock"
-          ? "Aprobado (Simulación local SIFEN_MODE=mock)"
-          : "En cola de lote asíncrono",
-      createdAt: now.toISOString(),
-    };
-
-    setInvoices((prev) => [newInvoice, ...prev]);
-    setSelectedInvoice(newInvoice);
-    showToast(`Factura ${fullNumber} emitida · Stock descontado en BD`);
   };
 
   const handleSaveEmitter = async (updated: EmitterProfile) => {
@@ -363,27 +283,22 @@ export default function App() {
     }
   };
 
-  const handleCancelInvoice = (invoiceId: string) => {
-    setInvoices((prev) =>
-      prev.map((inv) =>
-        inv.id === invoiceId
-          ? {
-              ...inv,
-              status: "CANCELLED",
-              sifenResponseCode: "0600",
-              sifenResponseMsg: "Evento de cancelación registrado",
-            }
-          : inv
-      )
-    );
-    showToast("Evento de cancelación SIFEN registrado");
+  const handleCancelInvoice = async (invoiceId: string) => {
+    try {
+      const updated = await api.cancelSifenDocument(invoiceId);
+      const [prods, movs] = await Promise.all([api.listProducts(), api.listMovements(150)]);
+      setProducts(prods);
+      setMovements(movs);
+      setInvoices((prev) => prev.map((inv) => (inv.id === updated.id ? updated : inv)));
+      showToast(`DE ${updated.documentFullNumber} cancelado · Stock repuesto en Kardex`);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Error cancelando documento", "err");
+    }
   };
 
   const handleResetDemo = () => {
-    window.localStorage.removeItem(INVOICES_STORAGE_KEY);
-    setInvoices(createInitialInvoices());
     void syncFromBackend();
-    showToast("Comprobantes demo reiniciados y BD sincronizada");
+    showToast("Datos sincronizados con PostgreSQL");
   };
 
   const lowStockCount = products.filter((p) => p.active && p.stock <= p.minStock).length;

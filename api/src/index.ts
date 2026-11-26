@@ -7,6 +7,7 @@ import { emitterRoutes } from "./routes/emitter.js";
 import { healthRoutes } from "./routes/health.js";
 import { kardexRoutes } from "./routes/kardex.js";
 import { productRoutes } from "./routes/products.js";
+import { salesRoutes } from "./routes/sales.js";
 
 const app = Fastify({
   bodyLimit: 4 * 1024 * 1024, // 4 MB para permitir carga de fotos en base64 (hasta 2 MB binarios)
@@ -30,6 +31,7 @@ await app.register(emitterRoutes);
 await app.register(productRoutes);
 await app.register(kardexRoutes);
 await app.register(customerRoutes);
+await app.register(salesRoutes);
 
 const shutdown = async (signal: string) => {
   app.log.info(`Recibida señal ${signal}, cerrando servidor...`);

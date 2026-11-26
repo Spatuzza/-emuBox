@@ -1,4 +1,4 @@
-import { Check, Code2, Copy, FileText, Printer, Receipt } from "lucide-react";
+import { Check, Code2, Copy, Download, FileText, Printer, Receipt } from "lucide-react";
 import { useState } from "react";
 import { formatCDC, formatDateTimePY, formatPYG, taxRateLabel } from "../lib/format";
 import type { EmitterProfile, SifenInvoice } from "../types/domain";
@@ -10,49 +10,20 @@ interface KudeModalProps {
   onClose: () => void;
 }
 
-/**
- * Genera una matriz visual QR determinística a partir del CDC (44 dígitos)
- * para previsualización en modo mock (en Parte 3 se generará QR PNG/SVG oficial con hash CSC).
- */
-function MockQrSvg({ seed }: { seed: string }) {
-  const size = 21;
-  const cells: Array<{ x: number; y: number }> = [];
-
-  const isFinder = (x: number, y: number) =>
-    (x < 7 && y < 7) || (x >= size - 7 && y < 7) || (x < 7 && y >= size - 7);
-
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      if (isFinder(x, y)) continue;
-      const idx = (y * size + x) % seed.length;
-      const charCode = seed.charCodeAt(idx);
-      if ((charCode + x * 7 + y * 13) % 3 === 0) {
-        cells.push({ x, y });
-      }
-    }
+function SifenQrImage({ invoice }: { invoice: SifenInvoice }) {
+  if (invoice.qrImageUrl) {
+    return (
+      <img
+        src={invoice.qrImageUrl}
+        alt="Código QR oficial SIFEN e-Kuatia"
+        className="h-28 w-28 rounded-lg border border-slate-200 bg-white p-1"
+      />
+    );
   }
-
-  const renderFinder = (ox: number, oy: number) => (
-    <g key={`${ox}-${oy}`}>
-      <rect x={ox} y={oy} width="7" height="7" fill="#0F172A" />
-      <rect x={ox + 1} y={oy + 1} width="5" height="5" fill="#FFFFFF" />
-      <rect x={ox + 2} y={oy + 2} width="3" height="3" fill="#0F172A" />
-    </g>
-  );
-
   return (
-    <svg
-      viewBox={`-1 -1 ${size + 2} ${size + 2}`}
-      className="h-28 w-28 rounded-lg border border-slate-200 bg-white p-1"
-      aria-label="Código QR de consulta e-Kuatia"
-    >
-      {renderFinder(0, 0)}
-      {renderFinder(size - 7, 0)}
-      {renderFinder(0, size - 7)}
-      {cells.map((c) => (
-        <rect key={`${c.x}-${c.y}`} x={c.x} y={c.y} width="1" height="1" fill="#0F172A" />
-      ))}
-    </svg>
+    <div className="flex h-28 w-28 items-center justify-center rounded-lg border border-slate-200 bg-slate-50 text-[10px] text-slate-400">
+      QR SIFEN
+    </div>
   );
 }
 
@@ -126,7 +97,7 @@ export function KudeModal({ invoice, emitter, onClose }: KudeModalProps) {
               </button>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={() => void handleCopyCdc()}
@@ -144,15 +115,37 @@ export function KudeModal({ invoice, emitter, onClose }: KudeModalProps) {
                   </>
                 )}
               </button>
-              {tab !== "xml" && (
-                <button
-                  type="button"
-                  onClick={() => window.print()}
-                  className="inline-flex items-center gap-1.5 rounded-lg bg-[#060E24] px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-[#0c1a3d]"
+              {tab === "xml" && invoice.xmlDownloadUrl && (
+                <a
+                  href={invoice.xmlDownloadUrl}
+                  download
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-[#0038A8] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#002d87]"
                 >
-                  <Printer className="h-3.5 w-3.5" />
-                  Imprimir KuDE
-                </button>
+                  <Download className="h-3.5 w-3.5" />
+                  Descargar XML
+                </a>
+              )}
+              {tab !== "xml" && (
+                <>
+                  {invoice.kudeA4Url && (
+                    <a
+                      href={`${tab === "ticket" ? invoice.kude80mmUrl : invoice.kudeA4Url}&download=1`}
+                      download
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-[#0038A8] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#002d87]"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                      PDF {tab === "ticket" ? "80mm" : "A4"}
+                    </a>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => window.print()}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-[#060E24] px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-[#0c1a3d]"
+                  >
+                    <Printer className="h-3.5 w-3.5" />
+                    Imprimir
+                  </button>
+                </>
               )}
             </div>
           </div>
@@ -231,7 +224,7 @@ export function KudeModal({ invoice, emitter, onClose }: KudeModalProps) {
                 </div>
 
                 <div className="flex flex-col items-center gap-2 pt-3 text-center">
-                  <MockQrSvg seed={invoice.cdc} />
+                  <SifenQrImage invoice={invoice} />
                   <p className="text-[9px] font-semibold text-slate-700">
                     Consulte la validez de esta Factura Electrónica con el CDC:
                   </p>
@@ -333,7 +326,7 @@ export function KudeModal({ invoice, emitter, onClose }: KudeModalProps) {
 
               <div className="mt-4 flex flex-wrap items-center justify-between gap-4 border-t border-slate-200 pt-4">
                 <div className="flex items-center gap-3">
-                  <MockQrSvg seed={invoice.cdc} />
+                  <SifenQrImage invoice={invoice} />
                   <div className="max-w-xs space-y-1">
                     <p className="font-semibold text-slate-900">
                       Validación DNIT / e-Kuatia (SIFEN v150)

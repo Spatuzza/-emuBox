@@ -2,7 +2,10 @@ import type {
   Customer,
   EmitterProfile,
   HealthResponse,
+  PaymentCondition,
+  PaymentMethod,
   Product,
+  SifenInvoice,
   StockMovement,
   StockMovementType,
   SystemStatusResponse,
@@ -108,6 +111,25 @@ export const api = {
     apiJson<Customer>("/api/customers", {
       method: "POST",
       body: JSON.stringify(data),
+    }),
+
+  // Ventas transaccionales y Documentos SIFEN v150
+  createSale: (data: {
+    customerId: string;
+    paymentCondition: PaymentCondition;
+    paymentMethod: PaymentMethod;
+    notes?: string;
+    items: Array<{ productId: string; quantity: number }>;
+  }) =>
+    apiJson<SifenInvoice>("/api/sales", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  listSifenDocuments: (limit = 100) =>
+    apiJson<SifenInvoice[]>(`/api/sifen/documents?limit=${limit}`),
+  cancelSifenDocument: (id: string) =>
+    apiJson<SifenInvoice>(`/api/sifen/documents/${id}/cancel`, {
+      method: "POST",
     }),
 };
 
